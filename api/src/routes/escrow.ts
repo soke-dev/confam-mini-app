@@ -23,6 +23,9 @@ import {
   relayRefund,
   relayRelease,
   releasePayload,
+  permitPayload,
+  relayFundWithPermit,
+  hasPolygonEscrow,
 } from '../escrow.js';
 
 export const escrowRouter: Router = Router();
@@ -144,6 +147,45 @@ escrowRouter.post('/:questionId/fund/quote', authenticateEither, async (req, res
     [questionId, salt, usdc, usedRate],
   );
 
+  /**
+   * Which chain the caller is funding on.
+   *
+   * Said by the client, because the client is the one holding the wallet and
+   * knows what chain it is on. The mini app runs inside a host that offers
+   * Polygon; everything else is on Base and says nothing, which is why Base is
+   * what an absent parameter means.
+   *
+   * The two produce different signatures entirely — EIP-3009 on Base, EIP-2612
+   * permit on Polygon, because USDT there has no receiveWithAuthorization at
+   * all — so this decides what the caller is asked to sign.
+   */
+  if (req.query.chain === 'polygon') {
+    if (!hasPolygonEscrow()) {
+      res.status(503).json({
+        error: 'escrow_unconfigured',
+        detail: 'Funding on Polygon is not available yet.',
+      });
+      return;
+    }
+
+    const { permitDeadline, typedData: permitTyped } = await permitPayload({
+      owner: user.walletAddress,
+      amount: usdc,
+    });
+
+    res.json({
+      jobId,
+      salt,
+      deadline,
+      permitDeadline,
+      usdc,
+      chain: 'polygon',
+      token: 'USDT',
+      typedData: permitTyped,
+    });
+    return;
+  }
+
   const { typedData } = fundPayload({
     jobId,
     asker: user.walletAddress,
@@ -152,7 +194,7 @@ escrowRouter.post('/:questionId/fund/quote', authenticateEither, async (req, res
     salt,
   });
 
-  res.json({ jobId, salt, deadline, validBefore, usdc, typedData });
+  res.json({ jobId, salt, deadline, validBefore, usdc, chain: 'base', token: 'USDC', typedData });
 });
 
 escrowRouter.post('/:questionId/fund', authenticateEither, async (req, res) => {
@@ -192,18 +234,40 @@ escrowRouter.post('/:questionId/fund', authenticateEither, async (req, res) => {
   }
 
   const jobId = jobIdFor(questionId);
+  const onPolygon = req.query.chain === 'polygon';
+
+  if (onPolygon && !hasPolygonEscrow()) {
+    res.status(503).json({
+      error: 'escrow_unconfigured',
+      detail: 'Funding on Polygon is not available yet.',
+    });
+    return;
+  }
 
   try {
-    const result = await relayFund({
-      jobId,
-      asker: user.walletAddress!,
-      // The amount the quote fixed. Recomputing it here would break the nonce.
-      usdc: Number(q.fundUsdc),
-      deadline: Number(deadline),
-      salt: q.fundSalt as `0x${string}`,
-      validBefore: Number(validBefore),
-      signature,
-    });
+    /*
+     * The amount the quote fixed, either way. Recomputing it here would break
+     * the Base nonce, which is keccak(jobId, amount, salt), and would mean
+     * signing for one figure and relaying another on Polygon.
+     */
+    const result = onPolygon
+      ? await relayFundWithPermit({
+          jobId,
+          asker: user.walletAddress!,
+          usdt: Number(q.fundUsdc),
+          deadline: Number(deadline),
+          permitDeadline: Number((req.body as Record<string, unknown>).permitDeadline),
+          signature,
+        })
+      : await relayFund({
+          jobId,
+          asker: user.walletAddress!,
+          usdc: Number(q.fundUsdc),
+          deadline: Number(deadline),
+          salt: q.fundSalt as `0x${string}`,
+          validBefore: Number(validBefore),
+          signature,
+        });
 
     /**
      * Funded — so now it becomes a job, and now the ledger records the hold.

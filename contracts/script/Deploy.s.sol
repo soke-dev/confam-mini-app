@@ -43,6 +43,32 @@ contract Deploy is Script {
         require(owner != arbiter, "owner and arbiter must be different keys");
 
         /**
+         * Can this token actually be funded?
+         *
+         * The escrow accepts money two ways and no token has both: USDC has
+         * EIP-3009, USDT on Polygon has EIP-2612 permit. Deploying against a
+         * token with neither produces a contract that looks perfectly healthy,
+         * accepts an owner, an arbiter and a treasury, and cannot take a single
+         * payment — a fact nobody discovers until the first person tries to ask
+         * a question.
+         *
+         * Probed rather than assumed, because the address is an environment
+         * variable and the whole point of a deploy script is that the thing it
+         * puts on a chain forever was checked first.
+         */
+        (bool has3009,) = usdc.staticcall(
+            abi.encodeWithSignature("authorizationState(address,bytes32)", address(1), bytes32(0))
+        );
+        (bool hasPermit,) =
+            usdc.staticcall(abi.encodeWithSignature("nonces(address)", address(1)));
+
+        require(has3009 || hasPermit, "token supports neither EIP-3009 nor EIP-2612");
+
+        console2.log("token funding paths available:");
+        console2.log("  EIP-3009 (fund)           :", has3009);
+        console2.log("  EIP-2612 (fundWithPermit) :", hasPermit);
+
+        /**
          * Accepts a key with or without the 0x prefix.
          *
          * Exporters disagree: some emit 64 bare hex characters, others prefix

@@ -52,6 +52,97 @@ export type UsdcBalance = {
   cached: boolean;
 };
 
+/**
+ * Which chain a balance is being asked about.
+ *
+ * 'base' is this server's chain and the default everywhere: the escrow holds
+ * USDC there and settlement happens there. 'polygon' exists for the mini app,
+ * which runs inside a wallet host that offers Polygon and not Base, so the
+ * money in front of that person is USDT on Polygon.
+ */
+export type BalanceChain = 'base' | 'polygon';
+
+export type TokenBalance = UsdcBalance & {
+  /** What was actually counted, so nothing has to assume it was USDC. */
+  token: 'USDC' | 'USDT';
+  chain: BalanceChain;
+};
+
+/**
+ * One token, on one chain.
+ *
+ * Both tokens here happen to have six decimals, which is why one divisor
+ * serves. That is a fact about USDC and USDT rather than a rule about ERC-20s
+ * — most use eighteen — so a third token added here needs its decimals
+ * checked rather than assumed.
+ */
+export async function tokenBalanceOf(
+  address: string,
+  chain: BalanceChain = 'base',
+): Promise<TokenBalance> {
+  if (chain === 'base') {
+    const balance = await usdcBalanceOf(address);
+    return { ...balance, token: 'USDC', chain: 'base' };
+  }
+
+  const key = address.toLowerCase();
+  /*
+   * Its own cache key. Sharing one with the Base read would hand somebody the
+   * wrong chain's figure for as long as the entry lived, which is the kind of
+   * wrong that looks like a balance rather than like a bug.
+   */
+  const cacheKey = `polygon:${key}`;
+  const hit = cache.get(cacheKey);
+
+  if (hit && Date.now() - hit.readAt < config.chain.cacheMs) {
+    return {
+      usdc: toUsdc(hit.raw),
+      raw: hit.raw.toString(),
+      blockNumber: hit.atBlock,
+      cached: true,
+      token: 'USDT',
+      chain: 'polygon',
+    };
+  }
+
+  const data = BALANCE_OF + key.replace(/^0x/, '').padStart(64, '0');
+
+  const [result, blockHex] = await Promise.all([
+    polygonRpc<string>('eth_call', [{ to: config.polygon.usdt, data }, 'latest']),
+    polygonRpc<string>('eth_blockNumber', []),
+  ]);
+
+  const raw = BigInt(result);
+  const atBlock = Number(BigInt(blockHex));
+  cache.set(cacheKey, { atBlock, raw, readAt: Date.now() });
+
+  return {
+    usdc: toUsdc(raw),
+    raw: raw.toString(),
+    blockNumber: atBlock,
+    cached: false,
+    token: 'USDT',
+    chain: 'polygon',
+  };
+}
+
+/** The same JSON-RPC, pointed at Polygon. */
+async function polygonRpc<T>(method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(config.polygon.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (!response.ok) throw new Error(`Polygon RPC ${method} returned ${response.status}`);
+
+  const body = (await response.json()) as { result?: T; error?: { message: string } };
+  if (body.error) throw new Error(`Polygon RPC ${method}: ${body.error.message}`);
+  if (body.result === undefined) throw new Error(`Polygon RPC ${method} returned nothing`);
+  return body.result;
+}
+
 export async function usdcBalanceOf(address: string): Promise<UsdcBalance> {
   const key = address.toLowerCase();
   const hit = cache.get(key);

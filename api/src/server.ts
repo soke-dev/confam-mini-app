@@ -15,6 +15,7 @@ import { findDoc, legalPage } from './legalPage.js';
 import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
+import { miniRouter } from './routes/mini.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { agentAddress, hasAgentWallet } from './agentWallet.js';
 import { startAgentSettlement } from './agentSettle.js';
@@ -166,6 +167,13 @@ app.use('/agent', agentRouter);
  */
 app.use('/confamagent', demoRouter);
 app.use('/demo', demoRouter);
+/**
+ * The web app: a mini app inside a wallet on a phone, an ordinary web app in a
+ * browser on a desktop, one page doing both. Signs in with a wallet signature
+ * rather than Privy, because inside somebody else's wallet that is the only
+ * credential anybody is carrying.
+ */
+app.use('/mini', miniRouter);
 app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);
 

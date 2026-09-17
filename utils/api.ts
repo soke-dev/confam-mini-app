@@ -45,6 +45,25 @@ export function setTokenProvider(fn: (() => Promise<string | null>) | null): voi
   tokenProvider = fn;
 }
 
+/**
+ * What to do when a credential we actually sent comes back refused.
+ *
+ * Privy rotates its own tokens, so this almost never fires there. A wallet
+ * session is different: it is a fixed string with an expiry, and the server
+ * will stop honouring it when it lapses, when the account is re-keyed, or
+ * when the signing secret changes. Nothing was watching for that, so a stale
+ * session produced "invalid_token" on whatever screen the person happened to
+ * be using — an error message where a sign-in prompt belonged.
+ *
+ * The handler clears the session, which makes the app's own auth gate send
+ * them back to sign in, which is where the wallet connect lives.
+ */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
 export type ApiResult<T> =
   | { ok: true; data: T }
   /**
@@ -119,6 +138,16 @@ export async function apiFetch<T>(
         };
       }
     }
+
+    /**
+     * A credential we sent, refused.
+     *
+     * Guarded on having sent one, which matters: several calls are made
+     * deliberately without a token and a 401 is their normal answer. Treating
+     * those as an expired session would sign people out at startup, every
+     * time, for no reason.
+     */
+    if (response.status === 401 && token) onUnauthorized?.();
 
     if (!response.ok) {
       /**

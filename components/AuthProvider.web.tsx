@@ -1,7 +1,7 @@
 import React from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
-import { PRIVY_APP_ID, privyConfigured } from '@/utils/privyShared';
+import { PRIVY_APP_ID, WALLET_MODE, privyConfigured } from '@/utils/privyShared';
 
 /**
  * The browser provider. No client ID here — that is a native-only concept.
@@ -10,6 +10,17 @@ import { PRIVY_APP_ID, privyConfigured } from '@/utils/privyShared';
  * build renders its children rather than throwing.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  /**
+   * A wallet build mounts no Privy at all.
+   *
+   * Not merely unnecessary — actively wrong. PrivyProvider opens a session on
+   * mount and would sit underneath a person who has signed in with a wallet,
+   * holding a second, empty identity and reaching for storage it has no
+   * business touching. Leaving it out also leaves its SDK unreferenced, which
+   * is most of what the mini app would otherwise be downloading.
+   */
+  if (WALLET_MODE) return <>{children}</>;
+
   if (!privyConfigured) return <>{children}</>;
 
   return (

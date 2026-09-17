@@ -26,6 +26,7 @@ import React, {
 } from 'react';
 import { DEFAULT_DEADLINE, msUntilDeadline } from '@/constants/time';
 import { FEE_PERCENT, VERIFIED_ONLY_ABOVE } from '@/constants/money';
+import { WALLET_MODE } from '@/utils/privyShared';
 
 export type NearbyTask = {
   id: string;
@@ -1178,21 +1179,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
      * where it came from, which can land a moment later.
      */
 
+    /**
+     * Which chain to count on.
+     *
+     * The mini app runs inside a wallet host that offers Polygon and not Base,
+     * so the money in front of that person is USDT on Polygon. Showing them
+     * the Base balance would be answering a different question to the one they
+     * are asking — usually with a zero, because they have never held anything
+     * there.
+     *
+     * The client says which, because the client is the only one that knows:
+     * the same kind of session is used by the phone app, whose embedded wallet
+     * is on Base.
+     */
     const result = await apiFetch<{
+      /** The honest pair. `usdc` is the same number, kept for older builds. */
+      amount?: number | null;
+      token?: 'USDC' | 'USDT';
       usdc: number | null;
       blockNumber: number | null;
       ngnPerUsd: number | null;
       status: string;
-    }>('/auth/balance');
+    }>(WALLET_MODE ? '/auth/balance?chain=polygon' : '/auth/balance');
 
-    if (!result.ok || result.data.usdc === null) {
+    const amount = result.ok ? (result.data.amount ?? result.data.usdc) : null;
+
+    if (!result.ok || amount === null || amount === undefined) {
       // Left as it was rather than zeroed — a failed read is not a balance.
       setBalanceBlock(null);
       // Null means "could not tell", which callers must not read as "broke".
       return null;
     }
 
-    setUsdcBalance(result.data.usdc);
+    setUsdcBalance(amount);
     setBalanceBlock(result.data.blockNumber);
     if (result.data.ngnPerUsd) setNgnPerUsd(result.data.ngnPerUsd);
 
@@ -1206,7 +1225,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
 
     // The scan above is deliberately not awaited; the balance is already known.
-    return result.data.usdc;
+    return amount;
   }, []);
 
   /**

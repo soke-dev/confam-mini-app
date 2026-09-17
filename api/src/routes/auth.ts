@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
 import { storage } from '../storage.js';
-import { usdcBalanceOf } from '../chain.js';
+import { usdcBalanceOf, tokenBalanceOf } from '../chain.js';
 import { ngnRate } from '../rates.js';
 import { syncDeposits } from '../deposits.js';
 import { authenticate } from '../auth.js';
@@ -365,13 +365,36 @@ authRouter.get('/balance', authenticate, async (req, res) => {
     return;
   }
 
+  /**
+   * Which chain to count on, said by the client rather than guessed here.
+   *
+   * The caller is the only one that knows: the mini app runs inside a wallet
+   * host offering Polygon, the phone app has an embedded wallet on Base, and
+   * both present the same kind of session. Inferring it from the credential
+   * would be a rule that happens to hold today and silently misreports the
+   * day somebody signs into the web app with a wallet that is on Base.
+   *
+   * Anything unrecognised falls back to Base, which is this server's chain.
+   */
+  const chain = req.query.chain === 'polygon' ? 'polygon' : 'base';
+
   try {
     // The rate must never take the balance down with it, so a failure here
     // resolves to null rather than rejecting.
-    const [balance, rate] = await Promise.all([usdcBalanceOf(address), ngnRate()]);
+    const [balance, rate] = await Promise.all([tokenBalanceOf(address, chain), ngnRate()]);
 
     res.json({
       address,
+      /*
+       * `amount` and `token` are the honest pair. `usdc` is kept beside them
+       * because shipped copies of the app read it, and it carries the same
+       * number — but a field called usdc holding USDT would be exactly the
+       * kind of quiet lie that survives review, so anything new reads
+       * `amount` and labels it with `token`.
+       */
+      amount: balance.usdc,
+      token: balance.token,
+      chain: balance.chain,
       usdc: balance.usdc,
       raw: balance.raw,
       blockNumber: balance.blockNumber,

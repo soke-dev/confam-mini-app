@@ -1,139 +1,42 @@
-import { useCallback, useMemo, useState } from 'react';
-import {
-  usePrivy as usePrivyWeb,
-  useLoginWithEmail as useLoginWithEmailWeb,
-  useCreateWallet,
-  useSignTypedData,
-  useWallets,
-} from '@privy-io/react-auth';
-import {
-  readableAuthError,
-  type AuthState,
-  type AuthUser,
-  type EmailLogin,
-  type EmailLoginState,
-  type EnsureWallet,
-  type SignTypedData,
-} from './privyShared';
+import { WALLET_MODE } from './privyShared';
+import * as privy from './authPrivyWeb';
+import * as wallet from './authWallet';
 
 export * from './privyShared';
 
 /**
- * The browser half of the auth split. Metro picks this file on web.
+ * The browser half of the auth split, and the choice between its two halves.
  *
- * `@privy-io/react-auth` is the only Privy SDK that runs here — the Expo one
- * needs secure-store and passkey native modules that do not exist in a
- * browser. See privy.ts for why the two are kept behind one interface.
+ * Metro picks this file on web. It picks between Privy and a wallet: the app
+ * and the admin desk sign in with an email code and get an embedded wallet,
+ * while the mini app signs in with a signature from the wallet the host
+ * already provided.
+ *
+ * The choice is made once, here, at module load. It is not made inside the
+ * hooks, because a hook that called a different implementation depending on a
+ * condition would be calling a different number of hooks between renders,
+ * which React forbids outright. Binding the names once means each of these is
+ * a fixed function for the life of the bundle, and every screen above goes on
+ * importing `useAuth` without knowing which one it got.
+ *
+ * WALLET_MODE is a build-time constant, so the branch is decided before this
+ * ever runs.
  */
 
-/** Maps the web SDK's flow status onto the shared vocabulary. */
-function mapState(status: string | undefined): EmailLoginState {
-  switch (status) {
-    case 'sending-code':
-      return 'sending';
-    case 'awaiting-code-input':
-      return 'awaiting-code';
-    case 'submitting-code':
-      return 'submitting';
-    case 'done':
-      return 'done';
-    case 'error':
-      return 'error';
-    default:
-      return 'initial';
-  }
-}
+export const useAuth = WALLET_MODE ? wallet.useAuth : privy.useAuth;
+export const useEmailLogin = WALLET_MODE ? wallet.useEmailLogin : privy.useEmailLogin;
+export const useEnsureWallet = WALLET_MODE ? wallet.useEnsureWallet : privy.useEnsureWallet;
+export const useSignAuthorization = WALLET_MODE
+  ? wallet.useSignAuthorization
+  : privy.useSignAuthorization;
 
-export function useAuth(): AuthState & {
-  signOut: () => Promise<void>;
-  getToken: () => Promise<string | null>;
-} {
-  const { ready, authenticated, user, logout, getAccessToken } = usePrivyWeb();
-  const { wallets } = useWallets();
-
-  const mapped = useMemo<AuthUser | null>(() => {
-    if (!authenticated || !user) return null;
-
-    // The embedded wallet is the one Privy created, not a browser extension
-    // the person happens to have installed. Only ours is on Base and only
-    // ours can be signed with programmatically.
-    const embedded = wallets.find((w) => w.walletClientType === 'privy');
-
-    return {
-      did: user.id,
-      email: user.email?.address ?? null,
-      walletAddress: embedded?.address?.toLowerCase() ?? null,
-    };
-  }, [authenticated, user, wallets]);
-
-  return {
-    ready,
-    user: mapped,
-    signOut: logout,
-    getToken: getAccessToken,
-  };
-}
-
-export function useEmailLogin(): EmailLogin {
-  const { sendCode, loginWithCode, state } = useLoginWithEmailWeb();
-  const [error, setError] = useState<string | null>(null);
-
-  const send = useCallback(
-    async (email: string) => {
-      setError(null);
-      try {
-        await sendCode({ email });
-      } catch (cause) {
-        setError(readableAuthError(cause));
-        throw cause;
-      }
-    },
-    [sendCode],
-  );
-
-  const submit = useCallback(
-    async (code: string) => {
-      setError(null);
-      try {
-        await loginWithCode({ code });
-      } catch (cause) {
-        setError(readableAuthError(cause));
-        throw cause;
-      }
-    },
-    [loginWithCode],
-  );
-
-  return {
-    sendCode: send,
-    loginWithCode: submit,
-    state: mapState((state as { status?: string } | undefined)?.status),
-    error,
-  };
-}
-
-export function useEnsureWallet(): EnsureWallet {
-  const { createWallet } = useCreateWallet();
-  const { wallets } = useWallets();
-
-  return useCallback(async () => {
-    // createWallet throws if one already exists, so this is a guard, not an
-    // optimisation.
-    if (wallets.some((w) => w.walletClientType === 'privy')) return;
-    await createWallet();
-  }, [createWallet, wallets]);
-}
-
-export function useSignAuthorization(): SignTypedData {
-  const { signTypedData } = useSignTypedData();
-
-  return useCallback(
-    async (typedData) => {
-      const { signature } = await signTypedData(
-        typedData as Parameters<typeof signTypedData>[0],
-      );
-      return signature;
-    },
-    [signTypedData],
-  );
-}
+/**
+ * Wallet-only, and exported unconditionally so the sign-in screen can import
+ * it without a conditional import. In Privy builds these are never called —
+ * the screen checks WALLET_MODE before it reaches for them.
+ */
+export const useWalletChoices = wallet.useWalletChoices;
+export const connectWallet = wallet.connect;
+export const signInWithWallet = wallet.signIn;
+export const inNimiqPay = wallet.inNimiqPay;
+export type { FoundWallet } from './authWallet';

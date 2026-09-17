@@ -30,6 +30,7 @@ import { useThemeMode, type ThemeMode } from '@/contexts/ThemeContext';
 import { AddressScanner } from '@/components/AddressScanner';
 import { SendingIndicator } from '@/components/SendingIndicator';
 import { SheetKeyboardView } from '@/components/SheetKeyboardView';
+import { BALANCE, SETTLEMENT } from '@/constants/chain';
 
 /**
  * Ties the amount field to its Done bar.
@@ -253,7 +254,7 @@ export default function YouScreen() {
    * source we do not control.
    */
   function openTx(txHash: string) {
-    void Linking.openURL(`https://basescan.org/tx/${txHash}`);
+    void Linking.openURL(SETTLEMENT.explorerTx(txHash));
   }
 
   function dismissWithdraw() {
@@ -332,7 +333,7 @@ export default function YouScreen() {
    */
   async function doShareAddress() {
     if (!walletAddress) return;
-    const message = `My Confam wallet (USDC on Base): ${walletAddress}`;
+    const message = `My Confam wallet (${SETTLEMENT.onChain}): ${walletAddress}`;
     try {
       if (Platform.OS === 'web') {
         // RN Web has no Share; the Web Share API exists only in some browsers,
@@ -544,7 +545,7 @@ export default function YouScreen() {
           <View style={styles.walletHead}>
             <Text style={[text.label, { color: colors.faintForeground, flex: 1 }]}>Wallet</Text>
             <View style={styles.walletMeta}>
-              <Text style={[text.data, { color: colors.mutedForeground }]}>USDC · Base</Text>
+              <Text style={[text.data, { color: colors.mutedForeground }]}>{BALANCE.token} · {BALANCE.chain}</Text>
               <Pressable
                 onPress={reloadBalance}
                 disabled={refreshingBalance}
@@ -809,7 +810,7 @@ export default function YouScreen() {
                         Crypto wallet
                       </Text>
                     </View>
-                    <Text style={[text.data, { color: colors.faintForeground }]}>USDC on Base</Text>
+                    <Text style={[text.data, { color: colors.faintForeground }]}>{SETTLEMENT.onChain}</Text>
                   </Pressable>
 
                   <View style={[styles.dest, styles.destLocked, { borderColor: colors.border }]}>
@@ -844,7 +845,7 @@ export default function YouScreen() {
                       Platform.OS === 'ios' ? AMOUNT_ACCESSORY_ID : undefined
                     }
                   />
-                  <Text style={[text.data, { color: colors.faintForeground }]}>USDC</Text>
+                  <Text style={[text.data, { color: colors.faintForeground }]}>{SETTLEMENT.token}</Text>
                 </View>
 
                 {/* ── Where exactly ────────────────────────────────────── */}
@@ -907,7 +908,7 @@ export default function YouScreen() {
                   ]}
                 >
                   {withdrawError ??
-                    'Base network only. Sending to an address on another chain loses the money.'}
+                    `${SETTLEMENT.chain} network only. Sending to an address on another chain loses the money.`}
                 </Text>
 
                 <Pressable
@@ -1028,8 +1029,8 @@ export default function YouScreen() {
                         <Text
                           style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}
                         >
-                          ${receipt.usdc.toFixed(2)} USDC is on its way. It usually lands within
-                          seconds.
+                          {`$${receipt.usdc.toFixed(2)} ${SETTLEMENT.token} is on its way. It usually
+                          lands within seconds.`}
                         </Text>
                       </View>
                     </View>
@@ -1070,7 +1071,7 @@ export default function YouScreen() {
                     >
                       <Ionicons name="open-outline" size={15} color={colors.foreground} />
                       <Text style={[text.action, { color: colors.foreground }]}>
-                        View on BaseScan
+                        {`View on ${SETTLEMENT.explorerName}`}
                       </Text>
                     </Pressable>
 
@@ -1164,7 +1165,7 @@ export default function YouScreen() {
             <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
             <Text style={[text.title, { color: colors.foreground }]}>Add money</Text>
             <Text style={[text.bodySmall, { color: colors.mutedForeground }]}>
-              Send USDC to this address and it lands in your wallet.
+              {`Send ${SETTLEMENT.token} to this address and it lands in your wallet.`}
             </Text>
 
             {/* No wallet, no QR. A scannable code is an instruction to send
@@ -1248,8 +1249,8 @@ export default function YouScreen() {
             <View style={[styles.chainWarn, { borderColor: colors.pending }]}>
               <Ionicons name="warning-outline" size={15} color={colors.pending} />
               <Text style={[text.data, { color: colors.pending, flex: 1 }]}>
-                Only send USDC on the Base network. Tokens sent on another chain cannot be
-                recovered.
+                {`Only send ${SETTLEMENT.onChain}. Tokens sent on another chain cannot be
+                recovered.`}
               </Text>
             </View>
           </Pressable>

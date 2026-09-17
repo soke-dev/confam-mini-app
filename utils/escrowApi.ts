@@ -1,4 +1,5 @@
 import { apiFetch, hasApi } from './api';
+import { WALLET_MODE } from '@/utils/privyShared';
 
 /**
  * The escrow, from the app's side.
@@ -91,15 +92,29 @@ async function step(
   return { ok: true, txHash: relayed.data.txHash };
 }
 
-/** Locks the bounty in the contract. Signed by the asker. */
-export const fundJob = (questionId: string, sign: Signer) =>
-  step(
-    `/escrow/${questionId}/fund/quote`,
-    `/escrow/${questionId}/fund`,
+/**
+ * Locks the bounty in the contract. Signed by the asker.
+ *
+ * Two shapes, because the two chains authorise payment differently. On Base
+ * the asker signs an EIP-3009 authorisation carrying its own validity window;
+ * on Polygon they sign an EIP-2612 permit, because USDT there has no
+ * receiveWithAuthorization at all. The server decides what to ask for from the
+ * same `chain` parameter, so the two can never disagree about which is being
+ * signed.
+ */
+export const fundJob = (questionId: string, sign: Signer) => {
+  const chain = WALLET_MODE ? '?chain=polygon' : '';
+  return step(
+    `/escrow/${questionId}/fund/quote${chain}`,
+    `/escrow/${questionId}/fund${chain}`,
     sign,
     undefined,
-    (quote) => ({ deadline: quote.deadline, validBefore: quote.validBefore }),
+    (quote) =>
+      WALLET_MODE
+        ? { deadline: quote.deadline, permitDeadline: quote.permitDeadline }
+        : { deadline: quote.deadline, validBefore: quote.validBefore },
   );
+};
 
 /** Records who answered, and a hash of what they sent. Signed by the verifier. */
 export const claimJob = (questionId: string, evidence: string, sign: Signer) =>

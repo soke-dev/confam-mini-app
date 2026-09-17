@@ -28,6 +28,22 @@ export const PRIVY_CLIENT_ID = process.env.EXPO_PUBLIC_PRIVY_CLIENT_ID ?? '';
 
 export const privyConfigured = PRIVY_APP_ID.length > 0;
 
+/**
+ * Whether this build signs in with a wallet instead of with Privy.
+ *
+ * Set for the mini app, which runs inside a wallet host where there is no
+ * email round trip worth running and no embedded wallet worth creating: the
+ * host has already put a wallet in front of the person, and it is the only
+ * credential they are carrying.
+ *
+ * Decided at build time rather than sniffed at runtime, and deliberately so.
+ * The admin desk is also a browser build, and whoever opens it may well have a
+ * wallet extension installed — detecting one and switching auth on that basis
+ * would change how somebody signs in depending on what they happen to have
+ * installed, which is not a decision the page should be making for them.
+ */
+export const WALLET_MODE = process.env.EXPO_PUBLIC_AUTH === 'wallet';
+
 export type AuthUser = {
   /** Privy DID — stable across email changes. The key the API stores. */
   did: string;

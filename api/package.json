@@ -13,6 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/migrate.ts",
     "checks:try": "tsx src/checks/try.ts",
+    "check:signin": "node scripts/check-signin.mjs",
+    "check:permit": "node scripts/check-permit.mjs",
     "images": "node scripts/inline-images.mjs"
   },
   "dependencies": {

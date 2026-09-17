@@ -24,6 +24,7 @@ import {
   type AgentKey,
 } from '@/utils/questionsApi';
 import { API_BASE } from '@/utils/api';
+import { SETTLEMENT } from '@/constants/chain';
 
 /**
  * Confam AI, for people who want to point a program at it.
@@ -122,7 +123,7 @@ export default function AgentScreen() {
         <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 6 }]}>
           An agent that decides whether anybody has to go and look. Ask it about a place and it
           answers from evidence somebody already brought back, if that still holds. Otherwise it
-          pays a person nearby in USDC on Base to walk there and photograph it.
+          {`pays a person nearby in ${SETTLEMENT.onChain} to walk there and photograph it.`}
         </Text>
         <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 10 }]}>
           It runs behind your own questions in this app. You can also point your own program at it.

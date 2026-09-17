@@ -9,7 +9,7 @@ import {
   parseUnits,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base } from 'viem/chains';
+import { base, polygon } from 'viem/chains';
 import { config, hasEscrow, hasGasWallet } from './config.js';
 
 /**
@@ -25,6 +25,29 @@ import { config, hasEscrow, hasGasWallet } from './config.js';
  */
 
 const ESCROW_ABI = [
+  {
+    /**
+     * The permit path, for tokens with no EIP-3009.
+     *
+     * USDT on Polygon is the one that matters: it has no
+     * receiveWithAuthorization at all, so the mini app's money can only reach
+     * the escrow this way.
+     */
+    name: 'fundWithPermit',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'jobId', type: 'bytes32' },
+      { name: 'asker', type: 'address' },
+      { name: 'amount', type: 'uint128' },
+      { name: 'deadline', type: 'uint64' },
+      { name: 'permitDeadline', type: 'uint256' },
+      { name: 'v', type: 'uint8' },
+      { name: 'r', type: 'bytes32' },
+      { name: 's', type: 'bytes32' },
+    ],
+    outputs: [],
+  },
   {
     name: 'fund',
     type: 'function',
@@ -129,16 +152,82 @@ const ESCROW_ABI = [
   },
 ] as const;
 
-const publicClient = createPublicClient({ chain: base, transport: http(config.chain.rpcUrl) });
+/**
+ * Which chain a job lives on.
+ *
+ * Base is where the escrow has always been and remains the default for every
+ * caller that does not say otherwise — the phone app, the agent API, every
+ * existing question. Polygon exists for the mini app, whose wallet host offers
+ * Polygon and not Base.
+ *
+ * Threaded explicitly rather than held in a module variable, because both are
+ * live at once in the same process and "the current chain" would be a race
+ * between two requests.
+ */
+export type EscrowChain = 'base' | 'polygon';
 
-function relayer() {
+/** Everything that differs between them, in one place. */
+function chainConfig(which: EscrowChain) {
+  return which === 'polygon'
+    ? {
+        viemChain: polygon,
+        rpcUrl: config.polygon.rpcUrl,
+        escrow: config.polygon.escrowAddress,
+        token: config.polygon.usdt,
+        gasSymbol: 'POL',
+        label: 'Polygon',
+      }
+    : {
+        viemChain: base,
+        rpcUrl: config.chain.rpcUrl,
+        escrow: config.chain.escrowAddress,
+        token: config.chain.usdc,
+        gasSymbol: 'ETH',
+        label: 'Base',
+      };
+}
+
+export const hasPolygonEscrow = () => /^0x[0-9a-f]{40}$/.test(config.polygon.escrowAddress);
+
+/** True when this chain is configured well enough to relay on. */
+export function escrowReady(which: EscrowChain): boolean {
+  return which === 'polygon' ? hasPolygonEscrow() && hasGasWallet() : hasEscrow() && hasGasWallet();
+}
+
+/*
+ * One client each, rather than a map keyed by chain. viem's client type is
+ * parameterised by the chain it was built for, so a map flattens both into a
+ * union and every read off it needs a cast — which is a lot of noise to save
+ * two lines.
+ */
+const publicClient = createPublicClient({ chain: base, transport: http(config.chain.rpcUrl) });
+const polygonClient = createPublicClient({
+  chain: polygon,
+  transport: http(config.polygon.rpcUrl),
+});
+
+function publicClientFor(which: EscrowChain) {
+  return which === 'polygon' ? polygonClient : publicClient;
+}
+
+function relayer(which: EscrowChain = 'base') {
   if (!hasGasWallet()) throw new Error('GAS_WALLET_PRIVATE_KEY is not set');
-  if (!hasEscrow()) throw new Error('ESCROW_ADDRESS is not set');
+  const { viemChain, rpcUrl, escrow, label } = chainConfig(which);
+  if (!/^0x[0-9a-f]{40}$/.test(escrow)) {
+    throw new Error(`No escrow contract configured for ${label}`);
+  }
+
+  /*
+   * The same key on both chains. An EVM address is the address everywhere, so
+   * the relayer that pays on Base is the relayer that pays on Polygon — which
+   * also means it needs a balance on each, in that chain's own gas token.
+   */
   const account = privateKeyToAccount(config.chain.gasWalletKey as `0x${string}`);
   return {
     account,
-    wallet: createWalletClient({ account, chain: base, transport: http(config.chain.rpcUrl) }),
-    escrow: config.chain.escrowAddress as `0x${string}`,
+    wallet: createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) }),
+    escrow: escrow as `0x${string}`,
+    chain: which,
   };
 }
 
@@ -330,11 +419,17 @@ function vrs(signature: string) {
   };
 }
 
-async function ensureGas(address: `0x${string}`): Promise<void> {
-  const balance = await publicClient.getBalance({ address });
+async function ensureGas(address: `0x${string}`, which: EscrowChain): Promise<void> {
+  const { gasSymbol, label } = chainConfig(which);
+  const balance = await publicClientFor(which).getBalance({ address });
   if (Number(formatEther(balance)) < config.chain.minGasWalletEth) {
+    /*
+     * Names the chain and its own gas token. The message used to say ETH on
+     * Base unconditionally, which on Polygon would send somebody to top up a
+     * balance that was never the problem.
+     */
     throw new Error(
-      `The gas wallet is out of ETH (${formatEther(balance)} on Base). Top it up to relay.`,
+      `The gas wallet is out of ${gasSymbol} (${formatEther(balance)} on ${label}). Top it up to relay.`,
     );
   }
 }
@@ -403,15 +498,17 @@ function readableRevert(error: unknown, functionName: string): Error {
 }
 
 async function send(
-  functionName: 'fund' | 'claim' | 'release' | 'refundExpired' | 'dispute',
+  functionName: 'fund' | 'fundWithPermit' | 'claim' | 'release' | 'refundExpired' | 'dispute',
   args: readonly unknown[],
+  which: EscrowChain = 'base',
 ): Promise<{ txHash: string; gasEth: string }> {
-  const { account, wallet, escrow } = relayer();
-  await ensureGas(account.address);
+  const { account, wallet, escrow } = relayer(which);
+  await ensureGas(account.address, which);
+  const chainClient = publicClientFor(which);
 
   let request;
   try {
-    ({ request } = await publicClient.simulateContract({
+    ({ request } = await chainClient.simulateContract({
       address: escrow,
       abi: ESCROW_ABI,
       functionName,
@@ -442,7 +539,7 @@ async function send(
   let attempt = 0;
 
   while (txHash === null) {
-    const nonce = await publicClient.getTransactionCount({
+    const nonce = await chainClient.getTransactionCount({
       address: account.address,
       blockTag: 'latest',
     });
@@ -459,7 +556,7 @@ async function send(
     }
   }
 
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 });
+  const receipt = await chainClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 });
 
   if (receipt.status !== 'success') throw new Error(`${functionName} reverted on chain (${txHash})`);
 
@@ -488,6 +585,119 @@ export const relayFund = (input: {
     r,
     s,
   ]);
+};
+
+/**
+ * The typed data an asker signs to fund a job with USDT on Polygon.
+ *
+ * Two things here are not what a reader would expect, and both were checked
+ * against the live contract rather than assumed.
+ *
+ * The domain uses `salt` where almost every EIP-2612 token uses `chainId`:
+ *
+ *     EIP712Domain(string name,string version,address verifyingContract,bytes32 salt)
+ *
+ * This was established by rebuilding both candidate domains and comparing each
+ * against what the token returns from DOMAIN_SEPARATOR(). The salt form
+ * matched; the standard form did not. Signing the standard way produces a
+ * signature that is valid in every respect except the one that counts, and it
+ * fails only on mainnet.
+ *
+ * And the name is "USDT0", not "Tether USD" — Tether migrated Polygon's USDT
+ * to their omnichain standard, keeping the address and changing the metadata.
+ * The name is part of the domain, so getting it wrong invalidates every
+ * signature just as surely.
+ *
+ * The nonce is read from the token at signing time. It increments on every
+ * permit that account makes, so a stale one signs something the token will
+ * refuse.
+ */
+export async function permitPayload(input: {
+  owner: string;
+  amount: number;
+  /** Seconds. The signature's own expiry, not the job's deadline. */
+  validForSeconds?: number;
+}) {
+  if (!hasPolygonEscrow()) throw new Error('No escrow contract configured for Polygon');
+
+  const nonce = (await polygonClient.readContract({
+    address: config.polygon.usdt as `0x${string}`,
+    abi: [
+      {
+        name: 'nonces',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [{ name: 'owner', type: 'address' }],
+        outputs: [{ name: '', type: 'uint256' }],
+      },
+    ],
+    functionName: 'nonces',
+    args: [input.owner as `0x${string}`],
+  })) as bigint;
+
+  const permitDeadline = Math.floor(Date.now() / 1000) + (input.validForSeconds ?? 3600);
+
+  return {
+    permitDeadline,
+    typedData: {
+      domain: {
+        name: 'USDT0',
+        version: '1',
+        verifyingContract: config.polygon.usdt as `0x${string}`,
+        /* bytes32 of the chain id. Not a chainId field — see above. */
+        salt: `0x${config.polygon.chainId.toString(16).padStart(64, '0')}` as `0x${string}`,
+      },
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'verifyingContract', type: 'address' },
+          { name: 'salt', type: 'bytes32' },
+        ],
+        Permit: [
+          { name: 'owner', type: 'address' },
+          { name: 'spender', type: 'address' },
+          { name: 'value', type: 'uint256' },
+          { name: 'nonce', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+        ],
+      },
+      primaryType: 'Permit' as const,
+      message: {
+        owner: input.owner,
+        spender: config.polygon.escrowAddress,
+        value: parseUnits(String(input.amount), 6).toString(),
+        nonce: nonce.toString(),
+        deadline: String(permitDeadline),
+      },
+    },
+  };
+}
+
+/** Funds a job on Polygon, where the token has no EIP-3009 to authorise with. */
+export const relayFundWithPermit = (input: {
+  jobId: `0x${string}`;
+  asker: string;
+  usdt: number;
+  deadline: number;
+  permitDeadline: number;
+  signature: string;
+}) => {
+  const { v, r, s } = vrs(input.signature);
+  return send(
+    'fundWithPermit',
+    [
+      input.jobId,
+      input.asker,
+      parseUnits(String(input.usdt), 6),
+      BigInt(input.deadline),
+      BigInt(input.permitDeadline),
+      v,
+      r,
+      s,
+    ],
+    'polygon',
+  );
 };
 
 export const relayClaim = (

@@ -15,6 +15,7 @@
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "desk": "node scripts/export-web.mjs",
+    "mini": "node scripts/start-mini.mjs",
     "push": "node scripts/push-update.mjs"
   },
   "devDependencies": {

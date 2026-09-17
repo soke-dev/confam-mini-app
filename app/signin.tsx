@@ -18,7 +18,8 @@ import { useColors } from '@/hooks/useColors';
 import { useThemeMode } from '@/contexts/ThemeContext';
 import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
-import { useEmailLogin, privyConfigured } from '@/utils/privy';
+import { useEmailLogin, privyConfigured, WALLET_MODE } from '@/utils/privy';
+import { WalletSignIn } from '@/components/WalletSignIn';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { Wordmark } from '@/components/Wordmark';
 
@@ -191,6 +192,21 @@ export default function SignInScreen() {
           </View>
 
           {/* ── Sign in ────────────────────────────────────────────── */}
+          {/*
+            * In the mini app the email panel is replaced rather than added to.
+            * Somebody inside a wallet host has no reason to be asked for an
+            * address and a six digit code: the credential they are carrying is
+            * the wallet, and asking for anything else would be asking them to
+            * make a second account for it.
+            *
+            * Everything around this — the headline, the three questions, the
+            * legal footer — is the screen the app already had.
+            */}
+          {WALLET_MODE ? (
+            <View style={styles.form}>
+              <WalletSignIn />
+            </View>
+          ) : (
           <View style={styles.form}>
             <Text style={[text.label, { color: colors.faintForeground }]}>Your email</Text>
             <View
@@ -329,6 +345,7 @@ export default function SignInScreen() {
               </Text>
             )}
           </View>
+          )}
 
           {/*
             * Openable, because it is being agreed to.

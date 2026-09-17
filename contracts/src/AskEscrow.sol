@@ -10,6 +10,30 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
+/// @notice EIP-2612, the other way to authorise a transfer by signature.
+///
+/// @dev Needed because not every dollar token speaks EIP-3009. USDC does;
+///      USDT on Polygon does not implement it at all, and that is the token
+///      the mini app's money is in. It does implement permit, so the same
+///      contract can serve both chains by funding through whichever the token
+///      it was deployed against actually supports.
+///
+///      One trap worth naming: permit's typed data on Polygon is signed
+///      against an EIP-712 domain that uses `salt` rather than `chainId`.
+///      That is the token's business, not this contract's — it verifies the
+///      signature itself — but anything producing those signatures has to know.
+interface IERC2612 {
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+}
+
 /// @notice USDC's EIP-3009, which lets someone authorise a transfer by
 /// signature so that a relayer can pay the gas for it.
 interface IERC3009 {
@@ -235,6 +259,65 @@ contract AskEscrow is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgrad
         emit Funded(jobId, asker, amount, deadline);
     }
 
+    /**
+     * @notice Funds a job with an EIP-2612 permit instead of an EIP-3009
+     *         authorisation. Same job, same guarantees, different signature.
+     *
+     * @dev Exists for tokens that have no receiveWithAuthorization — USDT on
+     *      Polygon being the one that matters, since that is what the mini app
+     *      holds. The asker still signs and still pays no gas; only the shape
+     *      of what they sign changes.
+     *
+     *      permitDeadline is the signature's own expiry and has nothing to do
+     *      with `deadline`, which is when the job stops being answerable. They
+     *      are separate on purpose: a short-lived signature is good practice,
+     *      and a job may legitimately run for a day.
+     *
+     *      The allowance check is not an optimisation. A permit signature is
+     *      public the moment it is relayed, and anyone may submit it first —
+     *      not to steal anything, since it only ever approves this contract,
+     *      but doing so consumes the token's nonce and makes our own permit
+     *      call revert. The job would then fail for a reason the asker could
+     *      neither see nor prevent, having already signed correctly. So if the
+     *      allowance is already there, whoever put it there, use it.
+     */
+    function fundWithPermit(
+        bytes32 jobId,
+        address asker,
+        uint128 amount,
+        uint64 deadline,
+        uint256 permitDeadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external nonReentrant {
+        if (jobs[jobId].status != Status.None) revert JobExists();
+        if (asker == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+        if (deadline <= block.timestamp) revert DeadlineInPast();
+
+        // Written before any external call, so a token that calls back finds
+        // the job already recorded rather than fundable twice.
+        jobs[jobId] = Job({
+            asker: asker,
+            verifier: address(0),
+            amount: amount,
+            deadline: deadline,
+            status: Status.Funded,
+            evidenceHash: bytes32(0)
+        });
+
+        if (usdc.allowance(asker, address(this)) < amount) {
+            IERC2612(address(usdc)).permit(asker, address(this), amount, permitDeadline, v, r, s);
+        }
+
+        // safeTransferFrom, because USDT returns no bool and a bare
+        // transferFrom would revert on decoding a return value it never sent.
+        usdc.safeTransferFrom(asker, address(this), amount);
+
+        emit Funded(jobId, asker, amount, deadline);
+    }
+
     // ─── Claiming ───────────────────────────────────────────────────────────
 
     /**
@@ -413,6 +496,48 @@ contract AskEscrow is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgrad
         IERC3009(address(usdc)).receiveWithAuthorization(
             from, address(this), amount, validAfter, validBefore, nonce, v, r, s
         );
+
+        uint256 fee = (uint256(amount) * feeBps) / 10_000;
+        uint256 paid = amount - fee;
+
+        usdc.safeTransfer(to, paid);
+        if (fee > 0) usdc.safeTransfer(treasury, fee);
+
+        emit Tipped(from, to, amount, fee);
+    }
+
+    /**
+     * @notice A tip, authorised by permit rather than by EIP-3009.
+     *
+     * @dev The permit path's counterpart to tip(), for the same reason
+     *      fundWithPermit() exists. Arrives, splits and leaves in one
+     *      transaction, so the contract never holds a tip.
+     *
+     *      Note what permit cannot carry that EIP-3009 could: the recipient.
+     *      An EIP-3009 nonce binds `to` into the signature, so the relayer
+     *      cannot redirect the payment. A permit only approves an amount to
+     *      this contract, which means the caller chooses who receives it.
+     *      That caller is our own relayer, and the tipped verifier is already
+     *      established off chain before this is ever invoked — but it is a
+     *      weaker guarantee than tip() gives and should be understood as such
+     *      rather than discovered later.
+     */
+    function tipWithPermit(
+        address from,
+        address to,
+        uint128 amount,
+        uint256 permitDeadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external nonReentrant {
+        if (to == address(0) || from == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+
+        if (usdc.allowance(from, address(this)) < amount) {
+            IERC2612(address(usdc)).permit(from, address(this), amount, permitDeadline, v, r, s);
+        }
+        usdc.safeTransferFrom(from, address(this), amount);
 
         uint256 fee = (uint256(amount) * feeBps) / 10_000;
         uint256 paid = amount - fee;

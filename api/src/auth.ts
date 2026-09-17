@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { PrivyClient } from '@privy-io/node';
 import { config, hasPrivy } from './config.js';
 import { one } from './db.js';
+import { readSession } from './miniSession.js';
 
 /**
  * Who the caller is, established by Privy rather than by this server.
@@ -65,6 +66,27 @@ export async function authenticate(
     return;
   }
 
+  /**
+   * The web app signs in with a wallet signature rather than with Privy, and
+   * gets one of our own tokens back. Rather than give it a parallel set of
+   * routes, it presents that token here and every existing route works.
+   *
+   * The two are told apart by shape, not by trying one and falling back to the
+   * other: ours begin "v1.", a Privy JWT begins with base64 of "{". Guessing
+   * would mean a Privy outage looked like a forged token, and a malformed
+   * token would cost a signature verification before being rejected.
+   */
+  if (token.startsWith('v1.')) {
+    const user = await fromWalletSession(token);
+    if (!user) {
+      res.status(401).json({ error: 'invalid_token' });
+      return;
+    }
+    req.user = user;
+    next();
+    return;
+  }
+
   let claims: { user_id: string; app_id: string };
   try {
     claims = await privy().utils().auth().verifyAccessToken(token);
@@ -86,6 +108,36 @@ export async function authenticate(
 
   req.user = user;
   next();
+}
+
+/**
+ * Resolves one of our own wallet sessions to the same user shape Privy yields.
+ *
+ * The session is verified by its signature alone — no database round trip is
+ * needed to know it is ours — but the row is still loaded, because a token
+ * outliving the account it names must not authenticate anybody. Returning null
+ * for a deleted user is the difference between a stale token being useless and
+ * it being a skeleton key.
+ */
+async function fromWalletSession(token: string): Promise<AuthedUser | null> {
+  const claims = readSession(token);
+  if (!claims) return null;
+
+  const user = await one<AuthedUser>(
+    `SELECT id, privy_did AS "privyDid", email, wallet_address AS "walletAddress"
+       FROM users WHERE id = $1`,
+    [claims.userId],
+  );
+  if (!user) return null;
+
+  /*
+   * The address in the token must still be the address on the row. They can
+   * only diverge if the account was re-keyed, and if that happened the old
+   * signature should stop opening the door.
+   */
+  if ((user.walletAddress ?? '').toLowerCase() !== claims.address) return null;
+
+  return user;
 }
 
 /**

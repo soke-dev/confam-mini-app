@@ -8,6 +8,7 @@ import { useColors } from '@/hooks/useColors';
 import { text } from '@/constants/type';
 import { formatNaira } from '@/constants/money';
 import { useApp, type WalletEntry } from '@/contexts/AppContext';
+import { SETTLEMENT } from '@/constants/chain';
 
 /**
  * How each kind of movement is named and signed.
@@ -34,7 +35,7 @@ const UNKNOWN_KIND = { label: 'Movement', sign: '+', tone: 'neutral' } as const;
 
 /** Base's block explorer, where a transaction can be verified independently. */
 function openTx(txHash: string) {
-  void Linking.openURL(`https://basescan.org/tx/${txHash}`);
+  void Linking.openURL(SETTLEMENT.explorerTx(txHash));
 }
 
 export default function ActivityScreen() {

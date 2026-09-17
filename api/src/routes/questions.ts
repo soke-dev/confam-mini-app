@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../auth.js';
 import { one, query, transaction } from '../db.js';
 import { hasEscrow } from '../config.js';
-import { usdcBalanceOf } from '../chain.js';
+import { usdcBalanceOf, tokenBalanceOf } from '../chain.js';
 import { ngnRate } from '../rates.js';
 import { storage } from '../storage.js';
 import { notify, nearbyVerifiers } from '../push.js';
@@ -134,8 +134,18 @@ questionsRouter.post('/', authenticate, async (req, res) => {
       return;
     }
 
+    /**
+     * Which chain holds the money that will pay for this.
+     *
+     * Said by the client for the same reason as everywhere else: it is the one
+     * holding the wallet. A mini app asker's balance is USDT on Polygon, and
+     * checking Base would refuse every question they ever ask against a zero
+     * belonging to an account they have never used.
+     */
+    const fundingChain = req.query.chain === 'polygon' ? 'polygon' : 'base';
+
     const [balance, rate, committed] = await Promise.all([
-      usdcBalanceOf(user.walletAddress),
+      tokenBalanceOf(user.walletAddress, fundingChain),
       ngnRate(),
       /**
        * Bounties already promised but not yet locked on chain.
@@ -169,8 +179,8 @@ questionsRouter.post('/', authenticate, async (req, res) => {
         error: 'insufficient_funds',
         detail:
           committedKobo > 0
-            ? `You have $${balance.usdc.toFixed(2)}, and ₦${(committedKobo / 100).toLocaleString()} is already promised to other questions. Top up about ₦${shortfallNaira.toLocaleString()}.`
-            : `You have $${balance.usdc.toFixed(2)}. This costs about $${neededUsdc.toFixed(2)} — top up around ₦${shortfallNaira.toLocaleString()}.`,
+            ? `You have ${balance.usdc.toFixed(2)} ${balance.token}, and ₦${(committedKobo / 100).toLocaleString()} is already promised to other questions. Top up about ₦${shortfallNaira.toLocaleString()}.`
+            : `You have ${balance.usdc.toFixed(2)} ${balance.token}. This costs about ${neededUsdc.toFixed(2)} ${balance.token} — top up around ₦${shortfallNaira.toLocaleString()}.`,
         availableUsdc: balance.usdc,
         requiredUsdc: Number(neededUsdc.toFixed(6)),
       });

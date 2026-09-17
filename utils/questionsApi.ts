@@ -1,4 +1,5 @@
 import { apiFetch, hasApi } from './api';
+import { WALLET_MODE } from '@/utils/privyShared';
 
 /**
  * The Ask and Earn loop, over the wire.
@@ -96,10 +97,19 @@ export const dispatchQuestion = (input: DispatchInput) =>
    * exists but is not yet a job anybody can see — funding it is what
    * dispatches it.
    */
-  apiFetch<{ id: string; createdAt: string; needsFunding: boolean }>('/questions', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
+  /*
+   * The chain travels with the request, because the server checks whether this
+   * person can actually pay before it writes anything down. A mini app asker's
+   * money is USDT on Polygon, and a check against Base would refuse every
+   * question they ask against a balance they were never going to use.
+   */
+  apiFetch<{ id: string; createdAt: string; needsFunding: boolean }>(
+    WALLET_MODE ? '/questions?chain=polygon' : '/questions',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  );
 
 export const myQuestions = () => apiFetch<{ questions: ServerQuestion[] }>('/questions/mine');
 

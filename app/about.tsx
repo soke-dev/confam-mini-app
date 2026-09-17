@@ -7,6 +7,7 @@ import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
 import { FEE_PERCENT, VERIFIED_ONLY_ABOVE, formatNaira } from '@/constants/money';
 import { Wordmark } from '@/components/Wordmark';
+import { SETTLEMENT } from '@/constants/chain';
 
 const STEPS = [
   {
@@ -117,7 +118,7 @@ export default function AboutScreen() {
             { k: 'Verified only', v: `Automatic above ₦${formatNaira(VERIFIED_ONLY_ABOVE)}` },
             { k: 'One job', v: 'One verifier, locked until it expires' },
             { k: 'Refunds', v: 'Full, if nobody delivers in your window' },
-            { k: 'Settlement', v: 'USDC on Base, when you confirm' },
+            { k: 'Settlement', v: `${SETTLEMENT.onChain}, when you confirm` },
           ].map((row, i) => (
             <View
               key={row.k}

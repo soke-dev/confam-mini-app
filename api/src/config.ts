@@ -128,6 +128,39 @@ export const config = {
   admin: { passwordHash: process.env.ADMIN_PASSWORD_HASH ?? '' },
 
   /**
+   * Polygon, where the mini app's money is.
+   *
+   * Separate from `chain` rather than folded into it, because it is not this
+   * server's chain: the escrow is on Base and settlement happens there. This
+   * exists because the mini app runs inside a wallet host that offers Polygon
+   * and not Base, so the balance somebody sees inside Nimiq Pay has to be the
+   * USDT they are actually holding. Reading it from Base and calling it their
+   * balance would be answering a different question to the one being asked.
+   */
+  polygon: {
+    /*
+     * publicnode, not polygon-rpc.com. The latter is the address everybody
+     * reaches for first and it now answers every call with "API key disabled,
+     * tenant disabled" — a 401 dressed as JSON, which surfaces here as a
+     * balance that cannot be read rather than as anything resembling a
+     * configuration error. Checked before it was chosen; 1rpc.io/matic and
+     * polygon.drpc.org also answer, if this one stops.
+     */
+    rpcUrl: process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com',
+    /** USDT on Polygon. Six decimals, like USDC — not the eighteen most use. */
+    usdt: (
+      process.env.POLYGON_USDT_ADDRESS ?? '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'
+    ).toLowerCase(),
+    chainId: num('POLYGON_CHAIN_ID', 137),
+    /**
+     * AskEscrow on Polygon. Empty until it is deployed, and empty is a real
+     * state rather than a misconfiguration: the mini app reads its balance
+     * from Polygon whether or not anything can be funded there yet.
+     */
+    escrowAddress: (process.env.POLYGON_ESCROW_ADDRESS ?? '').toLowerCase(),
+  },
+
+  /**
    * Base mainnet. The defaults are the public endpoint and the canonical USDC
    * contract, both overridable — the public RPC rate-limits, so anything with
    * real traffic wants an Alchemy or QuickNode URL here.
