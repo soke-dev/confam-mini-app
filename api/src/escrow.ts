@@ -245,13 +245,26 @@ function relayer(which: EscrowChain = 'base') {
 export const hasArbiter = () =>
   /^0x[0-9a-fA-F]{64}$/.test(config.chain.arbiterKey) && hasEscrow();
 
-function arbiter() {
-  if (!hasArbiter()) throw new Error('ARBITER_PRIVATE_KEY is not set');
+function arbiter(which: EscrowChain = 'base') {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(config.chain.arbiterKey)) {
+    throw new Error('ARBITER_PRIVATE_KEY is not set');
+  }
+  const { viemChain, rpcUrl, escrow, label } = chainConfig(which);
+  if (!/^0x[0-9a-f]{40}$/.test(escrow)) {
+    throw new Error(`No escrow contract configured for ${label}`);
+  }
+
+  /*
+   * The same key on both chains, and it pays its own gas on each — resolve()
+   * is onlyArbiter, so it cannot be relayed through the gas wallet. An arbiter
+   * with no balance on the chain a dispute was funded on cannot rule on it.
+   */
   const account = privateKeyToAccount(config.chain.arbiterKey as `0x${string}`);
   return {
     account,
-    wallet: createWalletClient({ account, chain: base, transport: http(config.chain.rpcUrl) }),
-    escrow: config.chain.escrowAddress as `0x${string}`,
+    wallet: createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) }),
+    escrow: escrow as `0x${string}`,
+    publicClient: publicClientFor(which),
   };
 }
 
@@ -270,10 +283,11 @@ export function arbiterAddress(): `0x${string}` | null {
 export async function relayResolve(
   jobId: `0x${string}`,
   askerWins: boolean,
+  which: EscrowChain = 'base',
 ): Promise<{ txHash: string }> {
-  const { account, wallet, escrow } = arbiter();
+  const { account, wallet, escrow, publicClient: chainClient } = arbiter(which);
 
-  const { request } = await publicClient.simulateContract({
+  const { request } = await chainClient.simulateContract({
     address: escrow,
     abi: ESCROW_ABI,
     functionName: 'resolve',
@@ -284,7 +298,7 @@ export async function relayResolve(
   });
 
   const txHash = await wallet.writeContract(request);
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  await chainClient.waitForTransactionReceipt({ hash: txHash });
   return { txHash };
 }
 
@@ -700,27 +714,48 @@ export const relayFundWithPermit = (input: {
   );
 };
 
+/*
+ * Everything after funding takes the chain the job was funded on.
+ *
+ * These used to assume Base, which was true while there was one escrow. Once
+ * a job can be funded on Polygon the assumption stops being harmless: the
+ * claim goes to a contract that has never heard of the job, reverts, and the
+ * person who walked somewhere cannot be paid for money that is definitely
+ * locked — just not where we looked.
+ *
+ * The default stays 'base' so every existing caller and every existing row
+ * behaves exactly as before.
+ */
 export const relayClaim = (
   jobId: `0x${string}`,
   verifier: string,
   evidenceHash: `0x${string}`,
   signature: string,
-) => send('claim', [jobId, verifier, evidenceHash, signature]);
+  which: EscrowChain = 'base',
+) => send('claim', [jobId, verifier, evidenceHash, signature], which);
 
-export const relayRelease = (jobId: `0x${string}`, signature: string) =>
-  send('release', [jobId, signature]);
+export const relayRelease = (
+  jobId: `0x${string}`,
+  signature: string,
+  which: EscrowChain = 'base',
+) => send('release', [jobId, signature], which);
 
-export const relayRefund = (jobId: `0x${string}`) => send('refundExpired', [jobId]);
+export const relayRefund = (jobId: `0x${string}`, which: EscrowChain = 'base') =>
+  send('refundExpired', [jobId], which);
 
-export const relayDispute = (jobId: `0x${string}`, raisedBy: string, signature: string) =>
-  send('dispute', [jobId, raisedBy, signature]);
+export const relayDispute = (
+  jobId: `0x${string}`,
+  raisedBy: string,
+  signature: string,
+  which: EscrowChain = 'base',
+) => send('dispute', [jobId, raisedBy, signature], which);
 
 /** Reads a job's on-chain state — the authority when it disagrees with us. */
-export async function readJob(jobId: `0x${string}`) {
-  if (!hasEscrow()) return null;
+export async function readJob(jobId: `0x${string}`, which: EscrowChain = 'base') {
+  if (!escrowReady(which)) return null;
   try {
-    const job = await publicClient.readContract({
-      address: config.chain.escrowAddress as `0x${string}`,
+    const job = await publicClientFor(which).readContract({
+      address: chainConfig(which).escrow as `0x${string}`,
       abi: ESCROW_ABI,
       functionName: 'getJob',
       args: [jobId],

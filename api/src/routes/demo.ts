@@ -491,11 +491,12 @@ demoRouter.post('/ask', async (req, res) => {
 demoRouter.post('/job/:id/refund', async (req, res) => {
   const job = await one<{
     chainJobId: string | null;
+    fundChain: string;
     refundTx: string | null;
     expired: boolean;
     taken: boolean;
   }>(
-    `SELECT q.chain_job_id AS "chainJobId", q.refund_tx AS "refundTx",
+    `SELECT q.chain_job_id AS "chainJobId", q.fund_chain AS "fundChain", q.refund_tx AS "refundTx",
             (q.dispatched_at + (q.deadline_minutes || ' minutes')::interval) < now() AS expired,
             EXISTS (SELECT 1 FROM tasks t WHERE t.question_id = q.id) AS taken
        FROM questions q
@@ -526,7 +527,10 @@ demoRouter.post('/job/:id/refund', async (req, res) => {
   }
 
   try {
-    const result = await relayRefund(job.chainJobId as `0x${string}`);
+    const result = await relayRefund(
+      job.chainJobId as `0x${string}`,
+      job.fundChain === 'polygon' ? 'polygon' : 'base',
+    );
     await query(
       `UPDATE questions SET refund_tx = $2, closed_at = COALESCE(closed_at, now()) WHERE id = $1`,
       [req.params.id, result.txHash],

@@ -150,7 +150,11 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
        * landed, retrying would send a second one that reverts on status —
        * harmless but wasteful, and it would report a funded job as failed.
        */
-      const onChain = await readJob(jobId).catch(() => null);
+      // Base, explicitly: the agent funds through relayFund, which is the
+      // EIP-3009 path and therefore always Base. Spelled out rather than left
+      // to the default, so that if the agent ever funds elsewhere this line
+      // is visibly wrong instead of quietly so.
+      const onChain = await readJob(jobId, 'base').catch(() => null);
       if (onChain && onChain.status !== 'none') {
         await record(null);
         return { ok: true, txHash: 'already_funded', jobId, usdc };
@@ -187,8 +191,13 @@ export async function releaseAsAgent(questionId: string): Promise<FundResult> {
   const key = config.chain.agentWalletKey;
   if (!agentAddress()) return { ok: false, reason: 'no_agent_wallet' };
 
-  const job = await one<{ chainJobId: string | null; verifierWallet: string | null }>(
-    `SELECT q.chain_job_id AS "chainJobId", u.wallet_address AS "verifierWallet"
+  const job = await one<{
+    chainJobId: string | null;
+    fundChain: string;
+    verifierWallet: string | null;
+  }>(
+    `SELECT q.chain_job_id AS "chainJobId", q.fund_chain AS "fundChain",
+            u.wallet_address AS "verifierWallet"
        FROM questions q
        LEFT JOIN tasks t ON t.question_id = q.id
        LEFT JOIN users u ON u.id = t.verifier_id
@@ -208,7 +217,8 @@ export async function releaseAsAgent(questionId: string): Promise<FundResult> {
    * response, and reporting that as an error would send somebody looking for a
    * problem that has already resolved itself.
    */
-  const onChain = await readJob(jobId).catch(() => null);
+  const which = job.fundChain === 'polygon' ? 'polygon' : 'base';
+  const onChain = await readJob(jobId, which).catch(() => null);
   if (onChain && onChain.status === 'released') {
     return { ok: true, txHash: 'already_released', jobId, usdc: 0 };
   }
@@ -218,7 +228,7 @@ export async function releaseAsAgent(questionId: string): Promise<FundResult> {
     const signature = await account.signTypedData(
       releasePayload(jobId, job.verifierWallet) as never,
     );
-    const result = await relayRelease(jobId, signature);
+    const result = await relayRelease(jobId, signature, which);
 
     await query(`UPDATE questions SET release_tx = COALESCE(release_tx, $2) WHERE id = $1`, [
       questionId,

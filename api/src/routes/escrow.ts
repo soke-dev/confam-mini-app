@@ -26,6 +26,7 @@ import {
   permitPayload,
   relayFundWithPermit,
   hasPolygonEscrow,
+  type EscrowChain,
 } from '../escrow.js';
 
 export const escrowRouter: Router = Router();
@@ -54,6 +55,17 @@ function questionIdOf(value: string | undefined): string | null {
  * job and the recipient are fixed by the server. A client that assembled its
  * own could sign something other than what it displayed.
  */
+
+/**
+ * Which chain a job's money is on, as a value the relays accept.
+ *
+ * Read from the row rather than from the request, because by this point it is
+ * a fact rather than a choice: the money is already locked in one specific
+ * contract and nothing a caller says can move it. Anything unrecognised falls
+ * back to Base, which is where every job funded before Polygon existed lives.
+ */
+const chainOf = (row: { fundChain?: string | null }): EscrowChain =>
+  row.fundChain === 'polygon' ? 'polygon' : 'base';
 
 escrowRouter.get('/status', authenticate, (_req, res) => {
   res.json({ available: hasEscrow() });
@@ -282,10 +294,18 @@ escrowRouter.post('/:questionId/fund', authenticateEither, async (req, res) => {
      */
     await transaction(async (client) => {
       await client.query(
+        /*
+         * fund_chain is written here and nowhere else. It stops being a
+         * preference and becomes a fact about where this person's money is
+         * the moment the transaction confirms, and every later relay — claim,
+         * release, dispute, refund — reads it to know which contract to talk
+         * to.
+         */
         `UPDATE questions
-            SET chain_job_id = $2, fund_tx = $3, dispatched_at = COALESCE(dispatched_at, now())
+            SET chain_job_id = $2, fund_tx = $3, fund_chain = $4,
+                dispatched_at = COALESCE(dispatched_at, now())
           WHERE id = $1`,
-        [questionId, jobId, result.txHash],
+        [questionId, jobId, result.txHash, onPolygon ? 'polygon' : 'base'],
       );
       await client.query(
         `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
@@ -370,7 +390,7 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
     refundTx: string | null;
     claimTx: string | null;
   }>(
-    `SELECT q.chain_job_id AS "chainJobId", q.body, p.name AS place,
+    `SELECT q.chain_job_id AS "chainJobId", q.fund_chain AS "fundChain", q.body, p.name AS place,
             q.fund_tx AS "fundTx", q.release_tx AS "releaseTx",
             q.refund_tx AS "refundTx", t.claim_tx AS "claimTx"
        FROM questions q
@@ -482,8 +502,9 @@ escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => 
   const user = req.user!;
   const evidence = String((req.body as { evidence?: unknown }).evidence ?? '');
 
-  const q = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1`,
+  const q = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1`,
     [questionId],
   );
   if (!q?.chainJobId) {
@@ -553,8 +574,9 @@ escrowRouter.post('/:questionId/claim', authenticate, async (req, res) => {
     return;
   }
 
-  const q = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1`,
+  const q = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1`,
     [questionId],
   );
   if (!q?.chainJobId) {
@@ -568,6 +590,7 @@ escrowRouter.post('/:questionId/claim', authenticate, async (req, res) => {
       user.walletAddress!,
       evidenceHash as `0x${string}`,
       signature,
+      chainOf(q),
     );
 
     await query(
@@ -593,8 +616,9 @@ escrowRouter.post('/:questionId/release/quote', authenticate, async (req, res) =
     res.status(400).json({ error: 'bad_question_id' });
     return;
   }
-  const job = await one<{ chainJobId: string | null; verifierWallet: string | null }>(
-    `SELECT q.chain_job_id AS "chainJobId", u.wallet_address AS "verifierWallet"
+  const job = await one<{ chainJobId: string | null; fundChain: string; verifierWallet: string | null }>(
+    `SELECT q.chain_job_id AS "chainJobId", q.fund_chain AS "fundChain",
+            u.wallet_address AS "verifierWallet"
        FROM questions q
        LEFT JOIN tasks t ON t.question_id = q.id
        LEFT JOIN users u ON u.id = t.verifier_id
@@ -629,8 +653,9 @@ escrowRouter.post('/:questionId/release', authenticate, async (req, res) => {
     return;
   }
 
-  const job = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1 AND asker_id = $2`,
+  const job = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1 AND asker_id = $2`,
     [questionId, req.user!.id],
   );
   if (!job?.chainJobId) {
@@ -646,7 +671,7 @@ escrowRouter.post('/:questionId/release', authenticate, async (req, res) => {
    * release() reverts on it, and the revert message says nothing useful, so
    * the reason is checked here and stated plainly instead.
    */
-  const chainJob = await readJob(job.chainJobId as `0x${string}`);
+  const chainJob = await readJob(job.chainJobId as `0x${string}`, chainOf(job));
   if (chainJob && /^0x0+$/.test(chainJob.verifier)) {
     res.status(409).json({
       error: 'no_claim_on_chain',
@@ -658,7 +683,7 @@ escrowRouter.post('/:questionId/release', authenticate, async (req, res) => {
   }
 
   try {
-    const result = await relayRelease(job.chainJobId as `0x${string}`, signature);
+    const result = await relayRelease(job.chainJobId as `0x${string}`, signature, chainOf(job));
     await query(`UPDATE questions SET release_tx = $2 WHERE id = $1`, [
       questionId,
       result.txHash,
@@ -684,8 +709,9 @@ escrowRouter.post('/:questionId/refund', authenticate, async (req, res) => {
     res.status(400).json({ error: 'bad_question_id' });
     return;
   }
-  const job = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1 AND asker_id = $2`,
+  const job = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1 AND asker_id = $2`,
     [questionId, req.user!.id],
   );
   if (!job?.chainJobId) {
@@ -694,7 +720,7 @@ escrowRouter.post('/:questionId/refund', authenticate, async (req, res) => {
   }
 
   try {
-    const result = await relayRefund(job.chainJobId as `0x${string}`);
+    const result = await relayRefund(job.chainJobId as `0x${string}`, chainOf(job));
     await query(`UPDATE questions SET refund_tx = $2 WHERE id = $1`, [
       questionId,
       result.txHash,
@@ -714,8 +740,9 @@ escrowRouter.post('/:questionId/dispute/quote', authenticate, async (req, res) =
     res.status(400).json({ error: 'bad_question_id' });
     return;
   }
-  const job = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1`,
+  const job = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1`,
     [questionId],
   );
   if (!job?.chainJobId || !req.user!.walletAddress) {
@@ -734,8 +761,9 @@ escrowRouter.post('/:questionId/dispute', authenticate, async (req, res) => {
     return;
   }
   const signature = String((req.body as { signature?: unknown }).signature ?? '');
-  const job = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1`,
+  const job = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1`,
     [questionId],
   );
   if (!job?.chainJobId || !signature) {
@@ -748,6 +776,7 @@ escrowRouter.post('/:questionId/dispute', authenticate, async (req, res) => {
       job.chainJobId as `0x${string}`,
       req.user!.walletAddress!,
       signature,
+      chainOf(job),
     );
     res.json({ ok: true, txHash: result.txHash });
   } catch (error) {
@@ -765,13 +794,14 @@ escrowRouter.get('/:questionId/job', authenticate, async (req, res) => {
     res.status(400).json({ error: 'bad_question_id' });
     return;
   }
-  const job = await one<{ chainJobId: string | null }>(
-    `SELECT chain_job_id AS "chainJobId" FROM questions WHERE id = $1`,
+  const job = await one<{ chainJobId: string | null; fundChain: string }>(
+    `SELECT chain_job_id AS "chainJobId", fund_chain AS "fundChain"
+       FROM questions WHERE id = $1`,
     [questionId],
   );
   if (!job?.chainJobId) {
     res.json({ job: null });
     return;
   }
-  res.json({ job: await readJob(job.chainJobId as `0x${string}`) });
+  res.json({ job: await readJob(job.chainJobId as `0x${string}`, chainOf(job)) });
 });

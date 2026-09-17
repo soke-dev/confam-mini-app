@@ -187,7 +187,7 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
     const outcome = await transaction(async (client) => {
       const { rows } = await client.query(
         `SELECT d.id, d.status, d.question_id, d.task_id,
-                q.asker_id, q.bounty_kobo, q.body, q.chain_job_id,
+                q.asker_id, q.bounty_kobo, q.body, q.chain_job_id, q.fund_chain,
                 t.verifier_id
            FROM disputes d
            JOIN questions q ON q.id = d.question_id
@@ -237,6 +237,7 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
       return {
         ok: true as const,
         chainJobId: dispute.chain_job_id ? String(dispute.chain_job_id) : null,
+        fundChain: String(dispute.fund_chain ?? 'base'),
         questionId: String(dispute.question_id),
         askerId: String(dispute.asker_id),
         verifierId: dispute.verifier_id ? String(dispute.verifier_id) : null,
@@ -272,7 +273,17 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
         console.warn('[admin] resolved in the database only — ARBITER_PRIVATE_KEY is not set');
       } else {
         try {
-          const r = await relayResolve(outcome.chainJobId as `0x${string}`, winner === 'asker');
+          /*
+           * On the chain the job was funded on. resolve() is onlyArbiter and
+           * is the only way out of Disputed, so submitting it to the wrong
+           * contract does not merely fail — it leaves the money frozen with
+           * no second route to it.
+           */
+          const r = await relayResolve(
+            outcome.chainJobId as `0x${string}`,
+            winner === 'asker',
+            outcome.fundChain === 'polygon' ? 'polygon' : 'base',
+          );
           await query(
             `UPDATE questions SET ${winner === 'asker' ? 'refund_tx' : 'release_tx'} = COALESCE(${winner === 'asker' ? 'refund_tx' : 'release_tx'}, $2) WHERE id = $1`,
             [outcome.questionId, r.txHash],
