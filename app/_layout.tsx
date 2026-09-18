@@ -34,6 +34,7 @@ import { ThemeProvider } from '@/contexts/ThemeContext';
 import { DialogProvider } from '@/contexts/DialogContext';
 import { AuthProvider } from '@/components/AuthProvider';
 import { ViewportHeight } from '@/components/ViewportHeight';
+import { WebFonts } from '@/components/WebFonts';
 import { AccountSync } from '@/components/AccountSync';
 import { useAuth } from '@/utils/privy';
 import SignInScreen from './signin';
@@ -202,9 +203,11 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      {/* Renders nothing. Corrects the document height on web; a no-op on a
-          device. Outside the providers because it depends on none of them. */}
+      {/* Both render nothing, and neither depends on a provider: one corrects
+          the document height on web, the other registers the fonts there.
+          No-ops on a device. */}
       <ViewportHeight />
+      <WebFonts />
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={styles.fill}>
