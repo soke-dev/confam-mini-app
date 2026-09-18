@@ -19,7 +19,6 @@ import { miniRouter } from './routes/mini.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { agentAddress, hasAgentWallet } from './agentWallet.js';
 import { startAgentSettlement } from './agentSettle.js';
-import { miniTestPage } from './miniTestPage.js';
 import { keccak256, verifyMessage } from 'viem';
 import { startAbandonedSweep } from './closeAbandoned.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
@@ -198,81 +197,6 @@ if (storageIsLocal) {
  *
  * Last, so nothing here can shadow a route that carries data.
  */
-/*
- * A throwaway that answers one question: does a Nimiq Pay WebView hand a mini
- * app the camera and the location? Their docs cover providers and network
- * access and say nothing about device APIs, and the answer decides whether
- * verifiers can work inside Nimiq Pay or only in the app.
- *
- * Served from here because getUserMedia is refused outside a secure context,
- * so a LAN address would fail for the wrong reason. Delete once it has been
- * read once.
- */
-app.get('/minitest', (_req, res) => {
-  res.type('html').send(miniTestPage());
-});
-
-/*
- * Takes a recording and throws it away.
- *
- * Recording inside the WebView proves nothing on its own: evidence has to
- * reach us. This measures whether a file of that size can, how long it takes
- * on the connection the verifier is actually on, and hashes it so we know it
- * arrived intact rather than merely arrived.
- *
- * Nothing is stored, so there is no reason for anybody to abuse it, and the
- * body cap is the same one the evidence endpoint uses.
- */
-app.post(
-  '/minitest/upload',
-  express.raw({ type: '*/*', limit: '25mb' }),
-  (req, res) => {
-    const body = req.body as Buffer;
-    const bytes = Buffer.isBuffer(body) ? body.length : 0;
-    res.json({
-      bytes,
-      kb: Math.round(bytes / 1024),
-      contentType: req.get('content-type') ?? 'none',
-      keccak256: bytes ? keccak256(body) : null,
-    });
-  },
-);
-
-/* One half of the sign-in handshake, so it can be proved from the phone. */
-const miniNonces = new Map<string, { nonce: string; at: number }>();
-
-app.post('/minitest/challenge', (req, res) => {
-  const address = String((req.body as { address?: unknown })?.address ?? '').trim();
-  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
-    res.status(400).json({ error: 'bad_address' });
-    return;
-  }
-  const nonce = Math.random().toString(36).slice(2, 12);
-  miniNonces.set(address.toLowerCase(), { nonce, at: Date.now() });
-  res.json({ message: `Confam capability check for ${address}. Nonce: ${nonce}` });
-});
-
-app.post('/minitest/verify', async (req, res) => {
-  const body = req.body as { address?: unknown; signature?: unknown };
-  const address = String(body?.address ?? '').trim();
-  const signature = String(body?.signature ?? '').trim();
-  const issued = miniNonces.get(address.toLowerCase());
-
-  if (!issued || Date.now() - issued.at > 10 * 60 * 1000) {
-    res.status(400).json({ error: 'no_challenge' });
-    return;
-  }
-  try {
-    const ok = await verifyMessage({
-      address: address as `0x${string}`,
-      message: `Confam capability check for ${address}. Nonce: ${issued.nonce}`,
-      signature: signature as `0x${string}`,
-    });
-    res.json({ ok, recovered: ok ? address.toLowerCase() : null });
-  } catch (error) {
-    res.status(400).json({ ok: false, detail: error instanceof Error ? error.message : 'bad' });
-  }
-});
 
 app.get('/', (req, res) => {
   res.type('html').send(landingPage(originOf(req)));
