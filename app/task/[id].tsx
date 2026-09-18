@@ -26,6 +26,7 @@ import { useDialog } from '@/contexts/DialogContext';
 import { useNow } from '@/hooks/useNow';
 import { font, text } from '@/constants/type';
 import { insecurePage } from '@/utils/secureContext';
+import { whereAmI } from '@/utils/whereAmI';
 import { useApp } from '@/contexts/AppContext';
 import { submitAnswer, takenJobs } from '@/utils/questionsApi';
 import { claimJob, escrowAvailable } from '@/utils/escrowApi';
@@ -482,20 +483,15 @@ export default function TaskScreen() {
    * the worst possible moment. Without it the check simply skips, as before.
    */
   async function whereAmINow(): Promise<{ lat: number; lng: number } | null> {
-    try {
-      const { status } = await Location.getForegroundPermissionsAsync();
-      if (status !== 'granted') return coords;
-
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const at = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-      setCoords(at);
-      return at;
-    } catch {
+    // Does not prompt: this runs while somebody is mid-submission, and a
+    // permission dialog there would interrupt the thing it is supporting.
+    const found = await whereAmI(false);
+    if (!found.ok) {
       // A fix that will not arrive must not cost somebody their submission.
       return coords;
     }
+    setCoords(found.at);
+    return found.at;
   }
 
   /**
@@ -720,16 +716,22 @@ export default function TaskScreen() {
      */
     let why: 'refused' | 'unavailable' | null = null;
 
-    try {
-      const { status, canAskAgain } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') why = canAskAgain ? 'unavailable' : 'refused';
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        at = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+    {
+      const found = await whereAmI(true);
+      if (!found.ok) why = found.why;
+      if (found.ok) {
+        at = found.at;
         setCoords(at);
         try {
+          /*
+           * Not on web. expo-location's reverse geocoding needs a Google Maps
+           * key there and has no timeout of its own, so the best case is a
+           * throw we catch and the worst is another wait with no end — on the
+           * screen that had just stopped hanging. The coordinates below are a
+           * complete answer; the name is a courtesy.
+           */
+          if (Platform.OS === 'web') throw new Error('no reverse geocoding on web');
+
           const [geo] = await Location.reverseGeocodeAsync({
             latitude: at.lat,
             longitude: at.lng,
@@ -746,9 +748,6 @@ export default function TaskScreen() {
       } else {
         setPlace('Location not shared');
       }
-    } catch {
-      why = 'unavailable';
-      setPlace('Location unavailable');
     }
 
     /**
