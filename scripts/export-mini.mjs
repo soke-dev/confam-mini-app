@@ -1,4 +1,12 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 /**
@@ -89,6 +97,49 @@ writeFileSync(
     2,
   ) + NEWLINE,
 );
+
+/**
+ * Moves the bundled assets out of a directory called node_modules.
+ *
+ * Metro writes font and image assets to a path mirroring where they came from,
+ * so the app's typefaces land in `assets/node_modules/@expo-google-fonts/...`.
+ * Vercel's uploader skips anything named node_modules, so those files were
+ * never deployed — and with a single-page rewrite catching every unmatched
+ * path, a request for a font returned index.html with a 200. Nothing looked
+ * broken from the outside: the files simply were not there, and the app fell
+ * back to the browser's default face with every icon as an empty box.
+ *
+ * Renaming the directory and rewriting the references is enough, because the
+ * paths only ever appear as literal strings in the bundle.
+ */
+function unhideVendorAssets() {
+  const from = `${OUT}/assets/node_modules`;
+  if (!existsSync(from)) return;
+
+  renameSync(from, `${OUT}/assets/vendor`);
+
+  let patched = 0;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (entry.name.endsWith('.js') || entry.name.endsWith('.html')) {
+        const before = readFileSync(path, 'utf8');
+        const after = before.split('assets/node_modules/').join('assets/vendor/');
+        if (after !== before) {
+          writeFileSync(path, after);
+          patched += 1;
+        }
+      }
+    }
+  };
+  walk(OUT);
+
+  console.log(`export-mini: moved assets out of node_modules (${patched} file(s) rewritten)`);
+}
+
+unhideVendorAssets();
 
 /*
  * The output is served as-is, so nothing may sit in it that is not meant to be
