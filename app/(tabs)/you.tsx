@@ -31,6 +31,7 @@ import { AddressScanner } from '@/components/AddressScanner';
 import { SendingIndicator } from '@/components/SendingIndicator';
 import { SheetKeyboardView } from '@/components/SheetKeyboardView';
 import { BALANCE, SETTLEMENT } from '@/constants/chain';
+import { WALLET_MODE } from '@/utils/privyShared';
 
 /**
  * Ties the amount field to its Done bar.
@@ -512,10 +513,20 @@ export default function YouScreen() {
             // A dash while loading, rather than a zero that reads as a fact.
             { label: 'Earned', value: walletLoaded ? `₦${totalEarned.toLocaleString()}` : '—' },
             { label: 'Jobs done', value: walletLoaded ? String(jobsDone) : '—' },
-            {
-              label: 'Topped up',
-              value: walletLoaded ? `$${totalDepositedUsdc.toFixed(2)}` : '—',
-            },
+            /*
+             * "Topped up" counts money sent into the embedded wallet, which in
+             * the mini app is always nothing: there is no embedded wallet to
+             * send to. A stat permanently reading $0.00 is worse than no stat
+             * — it looks like a broken sum rather than a category that does
+             * not apply. Questions asked is the figure that means something
+             * for somebody bringing their own wallet.
+             */
+            WALLET_MODE
+              ? { label: 'Asked', value: walletLoaded ? String(questionsAsked) : '—' }
+              : {
+                  label: 'Topped up',
+                  value: walletLoaded ? `$${totalDepositedUsdc.toFixed(2)}` : '—',
+                },
           ].map((s, i) => (
             <View
               key={s.label}
@@ -565,7 +576,18 @@ export default function YouScreen() {
               that we have not actually checked. */}
           <View style={styles.balanceRow}>
             <Text style={[text.amountLarge, { color: colors.foreground }]}>
-              {usdcBalance === null ? '—' : `$${usdcBalance.toFixed(2)}`}
+              {/*
+                * A dollar sign on Base, where it has always been, and the
+                * token's name in the mini app. USDT is a dollar too, but
+                * saying so where the money is USDT on Polygon and the escrow
+                * is USDC on Base invites exactly the confusion this build
+                * exists to avoid.
+                */}
+              {usdcBalance === null
+                ? '—'
+                : WALLET_MODE
+                  ? `${usdcBalance.toFixed(2)} ${BALANCE.token}`
+                  : `$${usdcBalance.toFixed(2)}`}
             </Text>
             {/* Only shown when a live rate arrived. No rate, no figure —
                 rather than a stale constant that reads like a real one. */}
@@ -576,28 +598,51 @@ export default function YouScreen() {
             )}
           </View>
 
-          <View style={styles.walletActions}>
-            <Pressable
-              onPress={() => setReceiveOpen(true)}
-              style={({ pressed }) => [
-                styles.primaryBtn,
-                styles.btnFill,
-                { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1 },
-              ]}
-            >
-              <Text style={[text.action, { color: colors.background }]}>Top up</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setWithdrawOpen(true)}
-              style={({ pressed }) => [
-                styles.outlineBtn,
-                styles.btnFill,
-                { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1 },
-              ]}
-            >
-              <Text style={[text.action, { color: colors.foreground }]}>Withdraw</Text>
-            </Pressable>
-          </View>
+          {/*
+            * Neither button belongs in the mini app.
+            *
+            * Both exist because of the embedded wallet: topping up means
+            * sending money to an address this app created on somebody's
+            * behalf, and withdrawing means moving it back out again. Somebody
+            * signing with their own wallet has neither problem — the escrow
+            * pays them directly, at the address they already hold the keys
+            * for, and they add money to it wherever they normally would.
+            *
+            * Left in, "Top up" would tell them to send funds to their own
+            * address on a chain their wallet is not even on, and "Withdraw"
+            * would try to move money out of an embedded wallet that does not
+            * exist. Both would fail, and the first would fail by losing
+            * somebody's money.
+            */}
+          {WALLET_MODE ? (
+            <Text style={[text.bodySmall, { color: colors.faintForeground, marginTop: 4 }]}>
+              This is your own wallet. Bounties are paid straight into it, and you add money to
+              it the same way you always do.
+            </Text>
+          ) : (
+            <View style={styles.walletActions}>
+              <Pressable
+                onPress={() => setReceiveOpen(true)}
+                style={({ pressed }) => [
+                  styles.primaryBtn,
+                  styles.btnFill,
+                  { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1 },
+                ]}
+              >
+                <Text style={[text.action, { color: colors.background }]}>Top up</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setWithdrawOpen(true)}
+                style={({ pressed }) => [
+                  styles.outlineBtn,
+                  styles.btnFill,
+                  { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Text style={[text.action, { color: colors.foreground }]}>Withdraw</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
 
         {/* ── Records ──────────────────────────────────────────────

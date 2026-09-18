@@ -1215,14 +1215,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBalanceBlock(result.data.blockNumber);
     if (result.data.ngnPerUsd) setNgnPerUsd(result.data.ngnPerUsd);
 
-    // Now the slow part, with nothing waiting on it. The ledger is only
-    // re-read when something actually landed, rather than every poll.
-    void (async () => {
-      const sync = await apiFetch<{ inserted: number }>('/auth/deposits/sync', {
-        method: 'POST',
-      });
-      if (sync.ok && sync.data.inserted > 0) void refreshWalletRef.current?.();
-    })();
+    /*
+     * Now the slow part, with nothing waiting on it. The ledger is only
+     * re-read when something actually landed, rather than every poll.
+     *
+     * Skipped entirely in the mini app. The scan exists to notice money
+     * arriving in an embedded wallet — an address this app created, which
+     * somebody funds by sending to it. A person signing with their own wallet
+     * never does that: they add money to it wherever they normally would, and
+     * the escrow pays them directly. Scanning Base for them would be looking
+     * for deposits that are not coming, on a chain they are not using, every
+     * twelve seconds.
+     */
+    if (!WALLET_MODE) {
+      void (async () => {
+        const sync = await apiFetch<{ inserted: number }>('/auth/deposits/sync', {
+          method: 'POST',
+        });
+        if (sync.ok && sync.data.inserted > 0) void refreshWalletRef.current?.();
+      })();
+    }
 
     // The scan above is deliberately not awaited; the balance is already known.
     return amount;
