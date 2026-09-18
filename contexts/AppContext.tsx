@@ -121,6 +121,16 @@ export type Visibility = 'public' | 'private';
 export type Query = {
   id: string;
   /**
+   * True from the moment Ask is tapped until the bounty is locked or the
+   * attempt fails.
+   *
+   * Distinct from `dispatchedAt`, which now means what it says: the money is
+   * committed. Something has to hold the difference, because during that
+   * window the question exists, the wallet is asking for a signature, and the
+   * one thing that is not yet true is the thing `dispatchedAt` used to claim.
+   */
+  funding?: boolean;
+  /**
    * The row's id on the server, once it has one.
    *
    * Kept beside the local id rather than replacing it. Screens navigate with
@@ -1702,7 +1712,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       verifiedOnly: boolean,
     ) => {
       const query = queriesRef.current.find((q) => q.id === id);
-      if (!query || query.dispatchedAt) return;
+      // `funding` as well as `dispatchedAt`: the first no longer becomes true
+      // straight away, so on its own it would let a second tap through while
+      // the wallet is still asking about the first.
+      if (!query || query.dispatchedAt || query.funding) return;
 
       const dispatchedAt = Date.now();
       // Big errands are restricted whether or not the asker ticked the box.
@@ -1735,10 +1748,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!created.ok) {
           setDispatchError(created.detail);
-          // Roll the local state back: nothing was sent, so it must not look
-          // as though something was.
+          // Nothing was sent, so nothing has to be undone — only the flag that
+          // said an attempt was in flight.
           setQueries((prev) =>
-            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null } : q)),
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
           );
           return;
         }
@@ -1748,6 +1761,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
 
         if (!created.data.needsFunding) {
+          // Nothing to sign, so nothing to wait for.
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
+          );
           void refreshJobs();
           return;
         }
@@ -1761,21 +1778,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               : `The bounty could not be locked — ${funded.detail}`,
           );
           setQueries((prev) =>
-            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null } : q)),
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
           );
           return;
         }
 
-        // Locked. Only now is it a job.
+        // Locked. Only now is it a job, and only now does it say so.
+        setQueries((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
+        );
         void refreshJobs();
         void refreshMyQuestionsRef.current?.();
         void refreshWalletRef.current?.();
       })();
 
+      /**
+       * The settings apply at once; the claim that it was sent does not.
+       *
+       * `dispatchedAt` used to be written here, before the signature was even
+       * asked for. On a phone, where the embedded wallet signs without a
+       * prompt, the gap was invisible. Inside a wallet host it is a modal that
+       * waits on a person: the question appeared as asked, and only then did
+       * the wallet surface — so the bounty looked created before anyone had
+       * agreed to pay it, and cancelling meant watching it disappear again.
+       *
+       * The comment below this already made the argument for the ledger and
+       * the board. This is the last optimistic claim of the three.
+       */
       setQueries((prev) =>
         prev.map((q) =>
           q.id === id
-            ? { ...q, bounty, visibility, deadlineMinutes, dispatchedAt, verifiedOnly: restricted }
+            ? {
+                ...q,
+                bounty,
+                visibility,
+                deadlineMinutes,
+                verifiedOnly: restricted,
+                dispatchedAt: null,
+                funding: true,
+              }
             : q,
         ),
       );
