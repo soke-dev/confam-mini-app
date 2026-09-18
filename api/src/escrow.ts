@@ -315,12 +315,26 @@ export function jobIdFor(questionId: string): `0x${string}` {
 }
 
 /** The EIP-712 domain the contract computes for itself. */
-function domain() {
+/**
+ * The escrow's own EIP-712 domain, on the chain the job lives on.
+ *
+ * Both fields move with the chain, and both have to. A wallet checks the
+ * chainId against what it is connected to and refuses outright when they
+ * disagree — "provided chain id does not match the current active chain" —
+ * so a Polygon job offered a Base domain never even reaches a signature. Were
+ * it to get past that, the contract would reject it anyway: the verifying
+ * address is part of what is signed, and the two escrows are different
+ * addresses.
+ *
+ * This was the last thing still assuming one chain after the relays stopped.
+ */
+function domain(which: EscrowChain = 'base') {
+  const { viemChain, escrow } = chainConfig(which);
   return {
     name: 'AskEscrow',
     version: '1',
-    chainId: config.chain.chainId,
-    verifyingContract: config.chain.escrowAddress,
+    chainId: viemChain.id,
+    verifyingContract: escrow,
   };
 }
 
@@ -380,8 +394,13 @@ export function fundPayload(input: {
 }
 
 /** What a verifier signs to record their claim on a job. */
-export const claimPayload = (jobId: `0x${string}`, verifier: string, evidenceHash: `0x${string}`) => ({
-  domain: domain(),
+export const claimPayload = (
+  jobId: `0x${string}`,
+  verifier: string,
+  evidenceHash: `0x${string}`,
+  which: EscrowChain = 'base',
+) => ({
+  domain: domain(which),
   types: {
     Claim: [
       { name: 'jobId', type: 'bytes32' },
@@ -394,8 +413,12 @@ export const claimPayload = (jobId: `0x${string}`, verifier: string, evidenceHas
 });
 
 /** What an asker signs to release payment. */
-export const releasePayload = (jobId: `0x${string}`, verifier: string) => ({
-  domain: domain(),
+export const releasePayload = (
+  jobId: `0x${string}`,
+  verifier: string,
+  which: EscrowChain = 'base',
+) => ({
+  domain: domain(which),
   types: {
     Release: [
       { name: 'jobId', type: 'bytes32' },
@@ -407,8 +430,12 @@ export const releasePayload = (jobId: `0x${string}`, verifier: string) => ({
 });
 
 /** What either party signs to raise a dispute. */
-export const disputePayload = (jobId: `0x${string}`, raisedBy: string) => ({
-  domain: domain(),
+export const disputePayload = (
+  jobId: `0x${string}`,
+  raisedBy: string,
+  which: EscrowChain = 'base',
+) => ({
+  domain: domain(which),
   types: {
     Dispute: [
       { name: 'jobId', type: 'bytes32' },

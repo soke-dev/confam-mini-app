@@ -556,7 +556,12 @@ escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => 
   res.json({
     jobId: q.chainJobId,
     evidenceHash,
-    typedData: claimPayload(q.chainJobId as `0x${string}`, user.walletAddress, evidenceHash),
+    typedData: claimPayload(
+      q.chainJobId as `0x${string}`,
+      user.walletAddress,
+      evidenceHash,
+      chainOf(q),
+    ),
   });
 });
 
@@ -637,7 +642,11 @@ escrowRouter.post('/:questionId/release/quote', authenticate, async (req, res) =
 
   res.json({
     jobId: job.chainJobId,
-    typedData: releasePayload(job.chainJobId as `0x${string}`, job.verifierWallet),
+    typedData: releasePayload(
+      job.chainJobId as `0x${string}`,
+      job.verifierWallet,
+      chainOf(job),
+    ),
   });
 });
 
@@ -750,7 +759,11 @@ escrowRouter.post('/:questionId/dispute/quote', authenticate, async (req, res) =
     return;
   }
   res.json({
-    typedData: disputePayload(job.chainJobId as `0x${string}`, req.user!.walletAddress),
+    typedData: disputePayload(
+      job.chainJobId as `0x${string}`,
+      req.user!.walletAddress,
+      chainOf(job),
+    ),
   });
 });
 

@@ -226,7 +226,7 @@ export async function releaseAsAgent(questionId: string): Promise<FundResult> {
   try {
     const account = privateKeyToAccount(key as `0x${string}`);
     const signature = await account.signTypedData(
-      releasePayload(jobId, job.verifierWallet) as never,
+      releasePayload(jobId, job.verifierWallet, which) as never,
     );
     const result = await relayRelease(jobId, signature, which);
 
