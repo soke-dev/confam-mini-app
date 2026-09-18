@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 
 /**
@@ -117,6 +117,37 @@ const expo = spawn('npx', ['expo', 'start', '--web', '--port', APP_PORT], {
     EXPO_NO_DOTENV: '1',
   },
 });
+
+/**
+ * Said again once Metro has drawn its banner.
+ *
+ * Printing the address before starting Expo put it above a QR code, a list of
+ * key bindings and half a screen of Metro's own output — so the one line
+ * anybody actually needs scrolled away before they could read it, and the
+ * terminal ended on a prompt about pressing 'w' to open a browser that is not
+ * where this runs.
+ */
+setTimeout(() => {
+  console.log('');
+  console.log(line);
+  console.log(`  Open this in Nimiq Pay:  ${app.url}`);
+  console.log(line);
+  console.log('');
+}, 6_000);
+
+/**
+ * Also on disk, because a terminal scrolls and this does not.
+ *
+ * Both addresses change every run, so there is no remembering them between
+ * sessions — but within one, `cat .mini-https-url` beats scrolling back
+ * through Metro.
+ */
+try {
+  const NEWLINE = String.fromCharCode(10);
+  writeFileSync('.mini-https-url', [`app  ${app.url}`, `api  ${api.url}`, ''].join(NEWLINE));
+} catch {
+  /* A read-only checkout is not a reason to refuse to start. */
+}
 
 /* One Ctrl-C should take all three down, not leave two tunnels running. */
 const stop = () => {
