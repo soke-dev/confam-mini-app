@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../auth.js';
 import { one, query, transaction } from '../db.js';
-import { hasEscrow } from '../config.js';
+import { config, hasEscrow } from '../config.js';
 import { usdcBalanceOf, tokenBalanceOf } from '../chain.js';
 import { ngnRate } from '../rates.js';
 import { storage } from '../storage.js';
@@ -476,14 +476,10 @@ questionsRouter.get('/answered', authenticate, async (_req, res) => {
  * and the database decides, not the order the requests happened to arrive in.
  */
 /**
- * How close counts as being there, in metres.
- *
- * Ikeja to Surulere is about 12.5km, and those are the two the rule has to
- * separate — so anything near that is no rule at all. 5km is wide enough that
- * a phone with a poor fix in a built-up area is not turned away, and narrow
- * enough that it means the neighbourhood rather than the city.
+ * How close counts as being there, in metres. See config.geo for the number
+ * and for what widening it costs.
  */
-const ACCEPT_RADIUS_M = 5_000;
+const ACCEPT_RADIUS_M = config.geo.acceptRadiusMetres;
 
 /** Haversine. Good to a few metres at these distances, and needs no PostGIS. */
 function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {

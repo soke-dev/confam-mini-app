@@ -315,6 +315,25 @@ export const config = {
   geo: {
     nearMetres: num('GEO_NEAR_METRES', 150),
     farMetres: num('GEO_FAR_METRES', 600),
+
+    /**
+     * How far from a place somebody may be and still take the job, in metres.
+     *
+     * Was a constant at 5km, chosen so the rule meant "the neighbourhood"
+     * rather than "the city": Ikeja to Surulere is about 12.5km, and a radius
+     * anywhere near that separates nothing.
+     *
+     * Now 15km, which is past that line and deliberately so — it is wide
+     * enough to demonstrate the app in a city where the two test accounts are
+     * not on the same street. It does mean somebody across Lagos can take a
+     * job they are not meaningfully at, and the area-name check below it is
+     * what still keeps that honest for places stored as regions.
+     *
+     * Here rather than in the code because it is a judgement that will want
+     * revisiting, and a judgement that changes with the city. Narrowing it
+     * again is an environment variable, not a deploy.
+     */
+    acceptRadiusMetres: num('ACCEPT_RADIUS_METRES', 15_000),
   },
 
   /** Frames sampled from a clip for the sharpness and relevance checks. */
