@@ -25,6 +25,7 @@ import { taskPhase } from '@/utils/taskPhase';
 import { useDialog } from '@/contexts/DialogContext';
 import { useNow } from '@/hooks/useNow';
 import { font, text } from '@/constants/type';
+import { insecurePage } from '@/utils/secureContext';
 import { useApp } from '@/contexts/AppContext';
 import { submitAnswer, takenJobs } from '@/utils/questionsApi';
 import { claimJob, escrowAvailable } from '@/utils/escrowApi';
@@ -778,6 +779,21 @@ export default function TaskScreen() {
           cancelLabel: 'Not now',
         });
         if (go) void Linking.openSettings();
+        return;
+      }
+
+      /*
+       * The browser refusing, rather than the sky. Over plain http on a LAN
+       * address the location call never produces a fix however long anybody
+       * waits, so telling them to step outside sends them to do something
+       * that cannot possibly help.
+       */
+      if (insecurePage()) {
+        await notify({
+          title: 'Location needs a secure page',
+          message:
+            'This copy of the app is being served over an insecure address, and browsers will not share location with one. Open it over https and try again.',
+        });
         return;
       }
 
