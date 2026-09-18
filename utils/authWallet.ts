@@ -375,6 +375,18 @@ export async function signIn(): Promise<void> {
  */
 export async function connectAndSignIn(entry: FoundWallet): Promise<void> {
   if (connected !== entry || !address) await connect(entry);
+
+  /*
+   * On the right chain from the start, rather than at the first signature that
+   * happens to care. Doing it here also means the balance read afterwards is
+   * of the chain the money is actually on, instead of whichever one the host
+   * happened to open with.
+   *
+   * Not fatal if it fails: signing in is proving who you are, and that works
+   * on any chain. Whatever needs Polygon asks again when it needs it.
+   */
+  await ensurePolygon().catch(() => {});
+
   await signIn();
 }
 
@@ -562,10 +574,69 @@ async function ensureConnected(): Promise<void> {
   );
 }
 
+/** Polygon, where the mini app's escrow and money are. */
+const POLYGON_HEX = '0x89';
+
+/**
+ * Puts the wallet on Polygon before anything is signed against it.
+ *
+ * Nimiq Pay opens on Ethereum, and nothing in the app was moving it. That was
+ * invisible for funding, because a permit is signed against the token's own
+ * EIP-712 domain, which uses `salt` and carries no chainId for a wallet to
+ * object to — so the bounty locked perfectly well while the wallet sat on the
+ * wrong chain.
+ *
+ * Claiming and releasing are signed against the escrow's domain, which does
+ * carry one. A wallet compares it to the chain it is connected to and refuses
+ * outright: "provided chain id does not match the current active chain", with
+ * no prompt, because there is nothing to show somebody about a signature it
+ * will not request. The verifier's claim never reached the contract, the job
+ * stayed Funded with nobody recorded to pay, and the asker's release then
+ * failed against a job that had never been claimed.
+ *
+ * Idempotent and cheap: a wallet already on Polygon returns immediately
+ * without troubling anyone.
+ */
+async function ensurePolygon(): Promise<void> {
+  if (!connected) return;
+
+  const current = (await connected.provider
+    .request({ method: 'eth_chainId' })
+    .catch(() => null)) as string | null;
+  if (current === POLYGON_HEX) return;
+
+  try {
+    await connected.provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: POLYGON_HEX }],
+    });
+  } catch (cause) {
+    /*
+     * 4902 is a wallet that has never heard of the chain, which is a thing to
+     * fix rather than a failure to report: offer the details and try again.
+     */
+    if ((cause as { code?: number } | null)?.code !== 4902) throw cause;
+
+    await connected.provider.request({
+      method: 'wallet_addEthereumChain',
+      params: [
+        {
+          chainId: POLYGON_HEX,
+          chainName: 'Polygon',
+          nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+          rpcUrls: ['https://polygon-rpc.com'],
+          blockExplorerUrls: ['https://polygonscan.com'],
+        },
+      ],
+    });
+  }
+}
+
 export function useSignAuthorization(): SignTypedData {
   return useCallback(async (typedData) => {
     await ensureConnected();
     if (!connected || !address) throw new Error('No wallet is connected.');
+    await ensurePolygon();
 
     /*
      * Signed by the person's own wallet, so this raises a prompt they must
