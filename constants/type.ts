@@ -1,4 +1,4 @@
-import { TextStyle } from 'react-native';
+import { Platform, TextStyle } from 'react-native';
 
 /**
  * Confam — "Signal" typography.
@@ -18,16 +18,33 @@ import { TextStyle } from 'react-native';
  * The string values must match the import names used in useFonts() in
  * app/_layout.tsx — that is what registers them as usable family names.
  */
-export const font = {
-  sans: 'Barlow_400Regular',
-  sansMedium: 'Barlow_500Medium',
-  sansSemi: 'Barlow_600SemiBold',
-  sansBold: 'Barlow_700Bold',
+/**
+ * What to fall back to on web when the real face has not arrived.
+ *
+ * React Native takes one family name and nothing else, but a browser takes a
+ * stack — and without one it falls back to its own default, which in a WebView
+ * is a serif. A board set in Barlow rendering in Times is not a smaller
+ * version of the design, it is a different one, and it is what somebody sees
+ * for the whole of the first load.
+ *
+ * Empty on a device, where the name must stay exactly what useFonts
+ * registered.
+ */
+const FALLBACK = Platform.OS === 'web' ? ', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' : '';
 
-  mono: 'IBMPlexMono_400Regular',
-  monoMedium: 'IBMPlexMono_500Medium',
-  monoSemi: 'IBMPlexMono_600SemiBold',
-  monoBold: 'IBMPlexMono_700Bold',
+const MONO_FALLBACK =
+  Platform.OS === 'web' ? ', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' : '';
+
+export const font = {
+  sans: `Barlow_400Regular${FALLBACK}`,
+  sansMedium: `Barlow_500Medium${FALLBACK}`,
+  sansSemi: `Barlow_600SemiBold${FALLBACK}`,
+  sansBold: `Barlow_700Bold${FALLBACK}`,
+
+  mono: `IBMPlexMono_400Regular${MONO_FALLBACK}`,
+  monoMedium: `IBMPlexMono_500Medium${MONO_FALLBACK}`,
+  monoSemi: `IBMPlexMono_600SemiBold${MONO_FALLBACK}`,
+  monoBold: `IBMPlexMono_700Bold${MONO_FALLBACK}`,
 } as const;
 
 export const text = {

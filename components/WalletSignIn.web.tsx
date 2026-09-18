@@ -12,7 +12,6 @@ import { font, text } from '@/constants/type';
  */
 import {
   connectAndSignIn,
-  inNimiqPay,
   signIn as signInWithWallet,
   useWalletChoices,
   type FoundWallet,
@@ -23,8 +22,12 @@ import {
  *
  * Replaces the email panel in the mini app. Inside Nimiq Pay there is nothing
  * to type: the host has put a wallet in front of us, so the whole flow is one
- * tap to connect and one signature to prove the address. On a desktop the same
- * screen lists whatever extensions announced themselves.
+ * tap to connect and one signature to prove the address.
+ *
+ * Only Nimiq Pay is offered. Discovery still finds browser extensions, and
+ * they are deliberately not listed — this runs as a mini app, the money is
+ * USDT on Polygon, and a MetaMask row would invite somebody to sign in with an
+ * account the rest of the flow was never opened for.
  *
  * Deliberately built from the same pieces as the rest of the app — 2px rules,
  * square corners, uppercase labels, one signal colour — rather than as a
@@ -93,8 +96,19 @@ export function WalletSignIn({ onSignedIn }: { onSignedIn?: () => void }) {
     }
   }, [onSignedIn]);
 
+  /**
+   * Nimiq Pay, and nothing else offered.
+   *
+   * Discovery still finds whatever else a browser has installed, and this
+   * deliberately does not list it. Confam runs here as a mini app: the wallet
+   * is the one the host provides, the money is USDT on Polygon, and a row
+   * offering MetaMask is an invitation to sign in with an account that will
+   * then be asked to switch chains and fund a bounty it was never opened for.
+   *
+   * On a desktop the row below says where to go instead, rather than leaving
+   * an empty panel that reads as "unsupported".
+   */
   const nimiq = wallets.find((w) => w.rdns === 'com.nimiq.pay');
-  const others = wallets.filter((w) => w.rdns !== 'com.nimiq.pay');
 
   /* Connected but not yet proven: one button, and what it will sign as. */
   if (connected && address) {
@@ -143,7 +157,7 @@ export function WalletSignIn({ onSignedIn }: { onSignedIn?: () => void }) {
 
   return (
     <View style={styles.wrap}>
-      <Text style={[text.label, { color: colors.faintForeground }]}>CONNECT A WALLET</Text>
+      <Text style={[text.label, { color: colors.faintForeground }]}>CONNECT</Text>
 
       {error ? <Problem colour={colors.danger} message={error} /> : null}
 
@@ -170,32 +184,9 @@ export function WalletSignIn({ onSignedIn }: { onSignedIn?: () => void }) {
         </View>
       )}
 
-      {others.length > 0 ? (
-        <Text style={[text.label, styles.divider, { color: colors.faintForeground }]}>
-          OR A BROWSER WALLET
-        </Text>
-      ) : null}
-
-      {others.map((entry) => (
-        <WalletRow
-          key={entry.rdns || entry.name}
-          wallet={entry}
-          detail={entry.rdns === 'injected' ? 'Injected into the page' : entry.rdns}
-          onPress={pick}
-          busy={busy}
-        />
-      ))}
-
-      {ready && others.length === 0 && !nimiq && !inNimiqPay() ? (
+      {!ready && !nimiq ? (
         <Text style={[text.bodySmall, styles.note, { color: colors.faintForeground }]}>
-          No wallet found. Install a browser wallet and reload, or open this page inside a
-          wallet app on your phone.
-        </Text>
-      ) : null}
-
-      {!ready ? (
-        <Text style={[text.bodySmall, styles.note, { color: colors.faintForeground }]}>
-          Looking for wallets...
+          Looking for your wallet...
         </Text>
       ) : null}
     </View>
@@ -273,7 +264,6 @@ const styles = StyleSheet.create({
   mark: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   rowLabel: { flex: 1, minWidth: 0 },
   rowName: { fontFamily: font.sansBold, fontSize: 15 },
-  divider: { marginTop: 10 },
   summary: { borderWidth: 2, borderRadius: 2, padding: 12, gap: 3 },
   address: { fontFamily: font.mono, fontSize: 13 },
   primary: {
