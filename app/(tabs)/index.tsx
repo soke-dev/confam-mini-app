@@ -22,6 +22,7 @@ import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
 import { AgentTrace, TraceStep } from '@/components/AgentTrace';
 import { PlacePicker } from '@/components/PlacePicker';
+import { SendingIndicator } from '@/components/SendingIndicator';
 import { QuestionRow } from '@/components/QuestionRow';
 import {
   placeForQuestion,
@@ -243,6 +244,14 @@ export default function AskScreen() {
   const [tipCustom, setTipCustom] = useState(false);
   const [tipDraft, setTipDraft] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /**
+   * From the confirm tap until the bounty is locked or the attempt fails.
+   *
+   * Covers two wallet dialogs and a relayed transaction, which is long enough
+   * that a screen showing nothing reads as a dropped tap and gets tapped
+   * again.
+   */
+  const [sending, setSending] = useState(false);
 
   // Captured at press time: once a fix is applied the input matches the
   // tidied text, so `canTidy` is already false and cannot report what just
@@ -478,8 +487,31 @@ export default function AskScreen() {
     setConfirmOpen(false);
 
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    dispatchQuery(queryId, bountyValue, visibility, deadlineValue, verifiedOnly);
-    router.push(`/tracking/${queryId}`);
+
+    /**
+     * Wait for the money before showing the screen about the job.
+     *
+     * This used to navigate immediately, which on a phone was near enough to
+     * true: the embedded wallet signs without a prompt and the relay follows
+     * in a second. In a wallet host it is two dialogs and a transaction, so
+     * "waiting for somebody" appeared while nobody had agreed to pay yet, and
+     * stayed there through a signature and a relay that might both fail.
+     *
+     * Now the tracker is only reached when there is genuinely something to
+     * track. A failure leaves you on this screen, with the question still
+     * filled in and the reason shown.
+     */
+    setSending(true);
+    const funded = await dispatchQuery(
+      queryId,
+      bountyValue,
+      visibility,
+      deadlineValue,
+      verifiedOnly,
+    );
+    setSending(false);
+
+    if (funded) router.push(`/tracking/${queryId}`);
   }
 
   // Shown from the moment the box is tapped, narrowing as you type. Not tied
@@ -1689,6 +1721,35 @@ export default function AskScreen() {
           the wallet immediately. Said plainly, along with the two things
           people actually want to know — when it is released, and what happens
           if nobody goes. */}
+      {/*
+        * Held open for the whole attempt: two wallet dialogs and a relayed
+        * transaction. Not dismissable, because there is nothing useful a tap
+        * could do to a signature already in front of somebody — and a backdrop
+        * that closes would look like a way to cancel something it cannot.
+        */}
+      <Modal visible={sending} transparent animationType="fade">
+        <View style={[styles.confirmBackdrop, { backgroundColor: colors.overlay }]}>
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              borderColor: colors.border,
+              borderWidth: 2,
+              borderRadius: 2,
+              paddingVertical: 22,
+              paddingHorizontal: 20,
+              width: '86%',
+              maxWidth: 380,
+              gap: 12,
+            }}
+          >
+            <SendingIndicator label="Locking the bounty" color={colors.accent} />
+            <Text style={[text.bodySmall, { color: colors.faintForeground }]}>
+              Approve it in your wallet. Nothing is sent until that is done.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
       <Modal
         visible={confirmOpen}
         transparent

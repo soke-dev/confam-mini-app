@@ -33,6 +33,7 @@ import { AppProvider, useApp } from '@/contexts/AppContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { DialogProvider } from '@/contexts/DialogContext';
 import { AuthProvider } from '@/components/AuthProvider';
+import { ViewportHeight } from '@/components/ViewportHeight';
 import { AccountSync } from '@/components/AccountSync';
 import { useAuth } from '@/utils/privy';
 import SignInScreen from './signin';
@@ -201,6 +202,9 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
+      {/* Renders nothing. Corrects the document height on web; a no-op on a
+          device. Outside the providers because it depends on none of them. */}
+      <ViewportHeight />
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={styles.fill}>

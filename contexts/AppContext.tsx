@@ -706,13 +706,20 @@ type AppContextType = {
    * should never reach this point — the price is only decided once the AI has
    * failed and a person actually has to walk somewhere.
    */
+  /**
+   * Resolves true only once the bounty is locked on chain.
+   *
+   * Awaitable because the caller has a decision to make on the answer: until
+   * the money is committed there is no job, and sending somebody to a screen
+   * about the job they just created is a claim this cannot yet support.
+   */
   dispatchQuery: (
     id: string,
     bounty: number,
     visibility: Visibility,
     deadlineMinutes: number,
     verifiedOnly: boolean,
-  ) => void;
+  ) => Promise<boolean>;
   /**
    * Give up on an overdue question and take the money back. Refused once
    * evidence exists — somebody has already walked there by then.
@@ -1704,93 +1711,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const dispatchQuery = useCallback(
-    (
+    async (
       id: string,
       bounty: number,
       visibility: Visibility,
       deadlineMinutes: number,
       verifiedOnly: boolean,
-    ) => {
+    ): Promise<boolean> => {
       const query = queriesRef.current.find((q) => q.id === id);
       // `funding` as well as `dispatchedAt`: the first no longer becomes true
       // straight away, so on its own it would let a second tap through while
       // the wallet is still asking about the first.
-      if (!query || query.dispatchedAt || query.funding) return;
+      if (!query || query.dispatchedAt || query.funding) return false;
 
       const dispatchedAt = Date.now();
-      // Big errands are restricted whether or not the asker ticked the box.
-      const restricted = verifiedOnly || bounty >= VERIFIED_ONLY_ABOVE;
-
-      /**
-       * Create it, then lock the money. In that order, and both must land.
-       *
-       * The question is not a job anybody can see until fund() confirms — the
-       * server leaves `dispatched_at` null until then. That is deliberate:
-       * advertising a bounty before it is committed lets somebody post one,
-       * decline the signature, and send a verifier walking for money that was
-       * never taken from anyone.
-       */
-      void (async () => {
-        if (!hasApi) return;
-
-        const created = await dispatchQuestion({
-          text: query.question,
-          placeName: query.place?.name ?? 'Somewhere nearby',
-          area: query.place?.area ?? null,
-          state: query.place ? stateForArea(query.place.area) : null,
-          lat: query.place?.coords?.lat ?? null,
-          lng: query.place?.coords?.lng ?? null,
-          bounty,
-          deadlineMinutes,
-          visibility,
-          verifiedOnly: restricted,
-        });
-
-        if (!created.ok) {
-          setDispatchError(created.detail);
-          // Nothing was sent, so nothing has to be undone — only the flag that
-          // said an attempt was in flight.
-          setQueries((prev) =>
-            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
-          );
-          return;
-        }
-
-        setQueries((prev) =>
-          prev.map((q) => (q.id === id ? { ...q, serverId: created.data.id } : q)),
-        );
-
-        if (!created.data.needsFunding) {
-          // Nothing to sign, so nothing to wait for.
-          setQueries((prev) =>
-            prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
-          );
-          void refreshJobs();
-          return;
-        }
-
-        const funded = await fundJobOnChain(created.data.id, signRef.current);
-
-        if (!funded.ok) {
-          setDispatchError(
-            funded.code === 'declined'
-              ? 'You cancelled the signature, so nothing was sent. Your money has not moved.'
-              : `The bounty could not be locked — ${funded.detail}`,
-          );
-          setQueries((prev) =>
-            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
-          );
-          return;
-        }
-
-        // Locked. Only now is it a job, and only now does it say so.
-        setQueries((prev) =>
-          prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
-        );
-        void refreshJobs();
-        void refreshMyQuestionsRef.current?.();
-        void refreshWalletRef.current?.();
-      })();
 
       /**
        * The settings apply at once; the claim that it was sent does not.
@@ -1820,6 +1754,82 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             : q,
         ),
       );
+
+      // Big errands are restricted whether or not the asker ticked the box.
+      const restricted = verifiedOnly || bounty >= VERIFIED_ONLY_ABOVE;
+
+      /**
+       * Create it, then lock the money. In that order, and both must land.
+       *
+       * The question is not a job anybody can see until fund() confirms — the
+       * server leaves `dispatched_at` null until then. That is deliberate:
+       * advertising a bounty before it is committed lets somebody post one,
+       * decline the signature, and send a verifier walking for money that was
+       * never taken from anyone.
+       */
+      if (!hasApi) return false;
+      {
+
+        const created = await dispatchQuestion({
+          text: query.question,
+          placeName: query.place?.name ?? 'Somewhere nearby',
+          area: query.place?.area ?? null,
+          state: query.place ? stateForArea(query.place.area) : null,
+          lat: query.place?.coords?.lat ?? null,
+          lng: query.place?.coords?.lng ?? null,
+          bounty,
+          deadlineMinutes,
+          visibility,
+          verifiedOnly: restricted,
+        });
+
+        if (!created.ok) {
+          setDispatchError(created.detail);
+          // Nothing was sent, so nothing has to be undone — only the flag that
+          // said an attempt was in flight.
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
+          );
+          return false;
+        }
+
+        setQueries((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, serverId: created.data.id } : q)),
+        );
+
+        if (!created.data.needsFunding) {
+          // Nothing to sign, so nothing to wait for.
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
+          );
+          void refreshJobs();
+          return true;
+        }
+
+        const funded = await fundJobOnChain(created.data.id, signRef.current);
+
+        if (!funded.ok) {
+          setDispatchError(
+            funded.code === 'declined'
+              ? 'You cancelled the signature, so nothing was sent. Your money has not moved.'
+              : `The bounty could not be locked — ${funded.detail}`,
+          );
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null, funding: false } : q)),
+          );
+          return false;
+        }
+
+        // Locked. Only now is it a job, and only now does it say so.
+        setQueries((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, dispatchedAt, funding: false } : q)),
+        );
+        void refreshJobs();
+        void refreshMyQuestionsRef.current?.();
+        void refreshWalletRef.current?.();
+        return true;
+      }
+
 
       /**
        * No optimistic hold, and no optimistic board entry.
