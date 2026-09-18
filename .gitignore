@@ -64,3 +64,6 @@ dist-*/
 
 # Written by npm run mini:https. Disposable quick-tunnel addresses.
 .mini-https-url
+
+# The hosted mini app build. Regenerate with npm run mini:export.
+dist-mini

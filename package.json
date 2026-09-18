@@ -17,6 +17,7 @@
     "desk": "node scripts/export-web.mjs",
     "mini": "node scripts/start-mini.mjs",
     "mini:https": "node scripts/start-mini-https.mjs",
+    "mini:export": "node scripts/export-mini.mjs",
     "push": "node scripts/push-update.mjs"
   },
   "devDependencies": {
