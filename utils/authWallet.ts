@@ -39,7 +39,7 @@ export type FoundWallet = {
   name: string;
   /** Reverse-DNS id, where the wallet announced one. */
   rdns: string;
-  /** A data: URI, or empty. Never a remote URL — see vet(). */
+  /** A data: URI, or empty. Never a remote URL — see remember(). */
   icon: string;
   provider: Eip1193;
 };
@@ -121,49 +121,38 @@ function store(next: Session | null): void {
 
 const seen = new Set<string>();
 
+/** The only wallet this app talks to. */
+const NIMIQ_PAY = 'com.nimiq.pay';
+
 /**
- * Whether a provider can actually sign on an EVM chain.
+ * Keeps the host's wallet, and leaves every other one alone.
  *
  * EIP-6963 is an Ethereum standard, but announcing on it has become how every
- * extension makes itself visible, so a browser with a normal spread of wallets
- * installed offers Cosmos, Solana, Polkadot, Hedera and Aptos wallets
- * alongside the ones that can work here. Listing all of them is not generosity,
- * it is several chances to pick the one that cannot.
+ * extension makes itself visible — so a browser with a normal spread installed
+ * announces Cosmos, Solana, Polkadot and Hedera wallets alongside anything
+ * that could work here.
  *
- * eth_chainId settles it honestly: no permission, no prompt, and a wallet that
- * cannot speak EVM either rejects it or answers with nothing. A functional
- * test rather than a list of names, because a list of names is wrong the
- * moment somebody ships a new wallet.
+ * This used to call eth_chainId on each of them to find out which could sign.
+ * It is a read, it needs no permission and it should prompt nobody, and some
+ * wallets prompt anyway: Keplr opened its own window on a page that had not
+ * offered it, was not going to offer it, and had no use for it. A wallet the
+ * app will never ask to sign should not be touched at all, and asking it a
+ * question is touching it.
+ *
+ * So nothing is probed. Confam runs as a mini app, the wallet is the one the
+ * host provides, and every other announcement is noted and dropped. On a
+ * desktop the list is simply empty, which is the truth there and is what the
+ * sign-in screen already says.
  */
-async function vet(entry: FoundWallet): Promise<void> {
-  /*
-   * Never vetted away. If this page is open inside Nimiq Pay then its provider
-   * is the entire point of being here, and a bridge that answered this one
-   * call oddly would leave the app with an empty list and no way in — far
-   * worse than showing a row that turns out not to work.
-   */
-  if (entry.rdns === 'com.nimiq.pay') {
-    wallets.push(entry);
-    emit();
-    return;
-  }
-
-  try {
-    const id = await entry.provider.request({ method: 'eth_chainId' });
-    if (typeof id === 'string' && id.startsWith('0x')) {
-      wallets.push(entry);
-      emit();
-    }
-  } catch {
-    /* Not an EVM wallet, or not a willing one. Either way, not for us. */
-  }
-}
-
 function remember(entry: FoundWallet): void {
   const key = entry.rdns || entry.name;
   if (seen.has(key)) return;
   seen.add(key);
-  void vet(entry);
+
+  if (entry.rdns !== NIMIQ_PAY) return;
+
+  wallets.push(entry);
+  emit();
 }
 
 export function inNimiqPay(): boolean {
@@ -198,21 +187,18 @@ function discover(): void {
 
   window.dispatchEvent(new Event('eip6963:requestProvider'));
 
-  /*
-   * The single-slot provider, added once announcements have had a tick to
-   * arrive. An extension supporting both would otherwise appear twice: once
-   * properly named, once as a generic injected wallet.
-   */
   setTimeout(() => {
+    /*
+     * The single-slot provider, once announcements have had a tick to arrive,
+     * and kept only when this really is the host. Nimiq
+     * Pay injects at window.ethereum and announces nothing over EIP-6963, so
+     * without this there would be no wallet inside the app at all — and
+     * outside it, window.ethereum is somebody's extension, which remember()
+     * drops for the reasons above.
+     */
     const injected = (window as { ethereum?: Eip1193 }).ethereum;
-    if (injected && !wallets.some((w) => w.provider === injected)) {
-      const host = inNimiqPay();
-      remember({
-        name: host ? 'Nimiq Pay' : 'Browser wallet',
-        rdns: host ? 'com.nimiq.pay' : 'injected',
-        icon: '',
-        provider: injected,
-      });
+    if (injected && inNimiqPay() && !wallets.some((w) => w.provider === injected)) {
+      remember({ name: 'Nimiq Pay', rdns: NIMIQ_PAY, icon: '', provider: injected });
     }
 
     ready = true;
