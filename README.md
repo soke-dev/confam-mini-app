@@ -1,4 +1,6 @@
-# Confam — a Nimiq Pay mini app
+# Confam
+
+### The physical world, on demand.
 
 **Pay somebody who is already there to go and look.**
 
