@@ -54,15 +54,6 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1;
 };
 
-/* The page itself, and that it carries the discovery the desktop path needs. */
-const page = await fetch(BASE + '/mini');
-const html = await page.text();
-check(
-  'GET /mini serves the page',
-  page.status === 200 && html.includes('eip6963:requestProvider'),
-  `${page.status}, ${html.length} bytes`,
-);
-
 const challenge = await post('/mini/challenge', { address: account.address });
 check(
   'a challenge is issued',

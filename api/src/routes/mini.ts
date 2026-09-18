@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import { verifyMessage } from 'viem';
 import { one } from '../db.js';
 import { mintSession, readSession, type MiniClaims } from '../miniSession.js';
-import { MINI_APP_PAGE } from '../miniApp.js';
 
 export const miniRouter: Router = Router();
 
@@ -22,6 +21,10 @@ export const miniRouter: Router = Router();
  * Sign-in is a signature over a sentence. No email, no password, nothing to
  * reset. The wallet is already the thing that will hold the money, so making
  * it also the identity removes a step rather than adding one.
+ *
+ * Routes only. The mini app itself is the Expo build, hosted separately and
+ * talking to these — there is no page served from here, because two
+ * implementations of one screen is one too many.
  */
 
 /* ── Sign in ──────────────────────────────────────────────────────────── */
@@ -231,10 +234,4 @@ miniRouter.get('/me', requireSession, async (req, res) => {
     console.error('[mini] /me failed', err);
     res.status(500).json({ error: 'lookup_failed' });
   }
-});
-
-/* ── The page ─────────────────────────────────────────────────────────── */
-
-miniRouter.get('/', (_req, res) => {
-  res.type('html').send(MINI_APP_PAGE);
 });

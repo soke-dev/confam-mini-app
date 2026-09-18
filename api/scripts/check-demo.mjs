@@ -78,16 +78,6 @@ const { DEMO_PAGE } = await import('../dist/demoPage.js');
 mustParse('agent terminal', DEMO_PAGE);
 
 /*
- * The web app, for the same reason and with one more of its own: its entire
- * job is to talk to a wallet, and a page whose script died on load looks
- * identical to a page that simply found no wallet. That is the failure nobody
- * reports, because from the outside it reads as "my wallet is not supported".
- */
-const { MINI_APP_PAGE } = await import('../dist/miniApp.js');
-mustParse('web app', MINI_APP_PAGE);
-mustBeWired('web app', MINI_APP_PAGE);
-
-/*
  * The landing page is rendered once, for the same reason the terminal's script
  * is parsed: it is generated, nothing imports it at build time, and a fault in
  * it is invisible until somebody loads the site.
