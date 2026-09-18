@@ -48,6 +48,37 @@ Every answer has a proof page: the hashes, the escrow job, every transaction.
 Hash the file yourself and compare — the server is not in the path of that
 check.
 
+### Programs ask too
+
+Not every asker is a person. An agent gets a key and uses the same three calls
+— ask, poll, accept — and the job it posts lands on the same board, is taken by
+the same people, and settles through the same contract. There is no
+agent-flavoured money.
+
+```
+# ask. finding somebody and paying them is handled for you
+POST /agent/ask
+     Authorization: Bearer sk_confam_...
+     { "question": "Is the gate open?", "place": "Apapa", "bountyNgn": 150 }
+
+     -> { "status": "dispatched", "id": "8f2c..." }
+     -> { "status": "answered", "source": "cached" }   if somebody already went
+
+# poll until somebody has been
+GET  /agent/ask/<id>
+
+     -> { "status": "answered", "answer": "Yes, the gate is open.",
+          "evidence": ["/media/..."], "metresFromPlace": 34 }
+
+# accept, and the person who walked there is paid
+POST /agent/ask/<id>/accept
+```
+
+`GET /agent` returns the tool definitions, ready to paste into whatever an
+agent uses. An answer nobody polls within fifteen minutes is accepted
+automatically, so a verifier is never left unpaid by a program that stopped
+calling.
+
 ---
 
 ## How it is put together
