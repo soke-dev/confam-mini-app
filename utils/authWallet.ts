@@ -501,9 +501,71 @@ export function useEnsureWallet(): EnsureWallet {
   return useCallback(async () => {}, []);
 }
 
+/**
+ * Makes sure there is a wallet to sign with, asking for one if there is not.
+ *
+ * The silent reconnection on load uses eth_accounts, which reports what is
+ * already authorised without prompting. That is the right call there — but it
+ * is not a method Nimiq Pay's documentation lists as supported, and if it is
+ * absent or answers with nothing then `connected` stays null while a perfectly
+ * good session sits in storage.
+ *
+ * That is what "no prompt appeared" looks like from the inside: signing threw
+ * before it ever reached the wallet, so there was nothing to approve and
+ * nothing to cancel. The bounty could not be locked, and the wallet was never
+ * even asked.
+ *
+ * eth_requestAccounts is documented and does prompt, so asking again here
+ * costs a tap in the worst case and removes the dependency entirely. When a
+ * session names an address, only a wallet holding that address will do —
+ * signing as somebody else would produce a signature the escrow rejects.
+ */
+async function ensureConnected(): Promise<void> {
+  if (connected && address) return;
+
+  /*
+   * Discovery is kicked off by useAuth's effect, which has almost certainly
+   * run by the time anybody is signing something. Almost is not a good enough
+   * reason to fail with "no wallet" when the real answer is "not yet", so if
+   * the list is empty, ask and give the announcements a moment to arrive.
+   */
+  if (wallets.length === 0) {
+    discover();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+
+  const target = session?.address.toLowerCase() ?? null;
+
+  for (const entry of wallets) {
+    try {
+      const accounts = (await entry.provider.request({
+        method: 'eth_requestAccounts',
+      })) as string[];
+      const first = (accounts ?? [])[0];
+      if (!first) continue;
+      if (target && !accounts.some((a) => String(a).toLowerCase() === target)) continue;
+
+      connected = entry;
+      address = first;
+      listen(entry);
+      emit();
+      return;
+    } catch {
+      /* Refused or unreachable. Try the next one. */
+    }
+  }
+
+  throw new Error(
+    target
+      ? 'Could not reach the wallet holding this account. Open this page in that wallet and try again.'
+      : 'No wallet is connected.',
+  );
+}
+
 export function useSignAuthorization(): SignTypedData {
   return useCallback(async (typedData) => {
-    if (!connected || !address) throw new Error('Connect a wallet first.');
+    await ensureConnected();
+    if (!connected || !address) throw new Error('No wallet is connected.');
 
     /*
      * Signed by the person's own wallet, so this raises a prompt they must

@@ -40,9 +40,6 @@ const USDT = (
 ).toLowerCase();
 const CHAIN_ID = 137;
 
-/* Any address will do as the spender: nothing is submitted. */
-const SPENDER = '0x000000000000000000000000000000000000dEaD';
-
 /* A published Anvil test key. It has never held anything. */
 const account = privateKeyToAccount(
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
@@ -56,29 +53,30 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1;
 };
 
-/* The same domain escrow.ts builds. Kept in step by hand, checked here. */
-const domain = {
-  name: 'USDT0',
-  version: '1',
-  verifyingContract: USDT,
-  salt: toHex(BigInt(CHAIN_ID), { size: 32 }),
-};
+/**
+ * The payload the server actually sends, not a copy of it.
+ *
+ * This used to rebuild the domain by hand beside escrow.ts's own. Both were
+ * right, and that is precisely the problem: two hand-written copies of a
+ * structure whose whole difficulty is being easy to get subtly wrong, with
+ * nothing to make them disagree out loud. Change one and this passes while
+ * production fails.
+ *
+ * Imported from dist, so `npm run build` has to have run — which it has, since
+ * the build is what produces the code this is checking.
+ */
+const { permitPayload } = await import('../dist/escrow.js');
 
-const types = {
-  EIP712Domain: [
-    { name: 'name', type: 'string' },
-    { name: 'version', type: 'string' },
-    { name: 'verifyingContract', type: 'address' },
-    { name: 'salt', type: 'bytes32' },
-  ],
-  Permit: [
-    { name: 'owner', type: 'address' },
-    { name: 'spender', type: 'address' },
-    { name: 'value', type: 'uint256' },
-    { name: 'nonce', type: 'uint256' },
-    { name: 'deadline', type: 'uint256' },
-  ],
-};
+const built = await permitPayload({ owner: account.address, amount: 1 });
+
+/*
+ * Round-tripped through JSON exactly as the client does: the browser hands
+ * eth_signTypedData_v4 a string, so anything that does not survive
+ * stringify/parse — a bigint, undefined, a Date — breaks there and not here.
+ */
+const typedData = JSON.parse(JSON.stringify(built.typedData));
+const domain = typedData.domain;
+const types = typedData.types;
 
 /* ── 1. the domain separator ──────────────────────────────────────────── */
 
@@ -129,20 +127,26 @@ const nonce = await client.readContract({
   args: [account.address],
 });
 
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
-const value = 1_000_000n; // 1 USDT, in six decimals
+/*
+ * The built message, unaltered. Its spender is the deployed escrow and its
+ * nonce was read from the token when permitPayload ran — so this checks the
+ * figures that would really be signed, not stand-ins for them.
+ */
+const message = typedData.message;
+const value = BigInt(message.value);
+const deadline = BigInt(message.deadline);
+
+check(
+  'the payload names the live nonce',
+  BigInt(message.nonce) === nonce,
+  `payload ${message.nonce}, chain ${nonce}`,
+);
 
 const signature = await account.signTypedData({
   domain,
   types,
   primaryType: 'Permit',
-  message: {
-    owner: account.address,
-    spender: SPENDER,
-    value,
-    nonce,
-    deadline,
-  },
+  message,
 });
 
 const permitAbi = [
@@ -183,7 +187,7 @@ const call = async (args) => {
   return res.json();
 };
 
-const good = await call([account.address, SPENDER, value, deadline, v, r, s]);
+const good = await call([message.owner, message.spender, value, deadline, v, r, s]);
 check(
   'the live contract accepts our signature',
   good.result !== undefined && !good.error,
@@ -214,7 +218,7 @@ const wrongSig = await account.signTypedData({
     Permit: types.Permit,
   },
   primaryType: 'Permit',
-  message: { owner: account.address, spender: SPENDER, value, nonce, deadline },
+  message,
 });
 
 const wr = wrongSig.slice(2);
@@ -222,8 +226,8 @@ let wv = parseInt(wr.slice(128, 130), 16);
 if (wv < 27) wv += 27;
 
 const bad = await call([
-  account.address,
-  SPENDER,
+  message.owner,
+  message.spender,
   value,
   deadline,
   wv,
