@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal, ActivityIndicator, Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -19,6 +20,7 @@ import {
 import { mediaUrl } from '@/utils/api';
 import { formatDistance } from '@/utils/evidenceChecks';
 import { disputeJob, escrowAvailable, refundJob, releaseJob } from '@/utils/escrowApi';
+import { SendingIndicator } from '@/components/SendingIndicator';
 import { useSignAuthorization } from '@/utils/privy';
 import { useRealtime, useRealtimeStatus } from '@/hooks/useRealtime';
 import { VerificationCard, Verification } from '@/components/VerificationCard';
@@ -236,6 +238,13 @@ export default function TrackingScreen() {
    * transfer never happened.
    */
   const [settleError, setSettleError] = useState<string | null>(null);
+  /**
+   * From the confirm tap until the verifier is actually paid.
+   *
+   * Covers a ledger write, a wallet signature and a relayed transaction. Long
+   * enough that a screen doing nothing reads as a dropped tap.
+   */
+  const [settling, setSettling] = useState(false);
 
   /**
    * Everything about this question arrives on one topic — the task being
@@ -508,44 +517,109 @@ export default function TrackingScreen() {
     };
   }, [serverId]);
 
+  /**
+   * Pay the verifier, and only then say they have been paid.
+   *
+   * This used to mark the question confirmed and run the paid animation on the
+   * first line, before the ledger, before the signature and before the
+   * release. On a phone the embedded wallet signs without a prompt and the gap
+   * was invisible. In a wallet host the confirmation screen appeared first and
+   * the wallet asked afterwards — so somebody was shown that they had paid,
+   * and then asked whether they wanted to, with the screen already claiming
+   * they had.
+   *
+   * The settling overlay covers the wait, which is a signature and a relayed
+   * transaction and can be several seconds.
+   */
   function handleConfirm() {
     setAction('confirm');
-    setResponse((v) => ({ ...v, status: 'confirmed' }));
-    setConfirmed(true);
-    setStepIndex(3);
-    Animated.timing(fade, { toValue: 1, duration: 380, useNativeDriver: true }).start();
 
     void (async () => {
       if (!query) return;
 
-      // The ledger first: it is what every screen reads, and it settles
-      // whether or not the job was ever funded on chain.
       if (!query.serverId) {
         setSettleError('This question never reached the server, so it cannot be settled.');
         return;
       }
-      const paid = await confirmAnswer(query.serverId);
-      if (!paid.ok) {
-        setSettleError(`Payment did not go through — ${paid.detail}`);
-        return;
-      }
 
-      // Then the contract, when there is one. A ledger-only job is already
-      // finished; releasing is what moves the real USDC when there is any.
-      if (await escrowAvailable()) {
-        const released = await releaseJob(query.serverId, signAuthorization);
-        if (!released.ok && released.code !== 'not_funded') {
-          setSettleError(
-            released.code === 'declined'
-              ? 'Confirmed. Sign when you are ready to release the funds.'
-              : `Confirmed, but the on-chain release failed — ${released.detail}`,
-          );
+      setSettling(true);
+      try {
+        // The ledger first: it is what every screen reads, and it settles
+        // whether or not the job was ever funded on chain.
+        const paid = await confirmAnswer(query.serverId);
+        if (!paid.ok) {
+          setSettleError(`Payment did not go through — ${paid.detail}`);
+          return;
         }
-      }
 
-      await Promise.all([refreshWallet(), refreshBalance()]);
+        // Then the contract, when there is one. A ledger-only job is already
+        // finished; releasing is what moves the real USDC when there is any.
+        let chainFailed: string | null = null;
+        if (await escrowAvailable()) {
+          const released = await releaseJob(query.serverId, signAuthorization);
+          if (!released.ok && released.code !== 'not_funded') {
+            chainFailed =
+              released.code === 'declined'
+                ? 'Confirmed. Sign when you are ready to release the funds.'
+                : `Confirmed, but the on-chain release failed — ${released.detail}`;
+          }
+        }
+
+        /*
+         * Marked confirmed either way, because the ledger settled — but the
+         * chain failure is still said out loud. Money that moved in our
+         * records and not in the contract is exactly the gap worth naming.
+         */
+        setResponse((v) => ({ ...v, status: 'confirmed' }));
+        setConfirmed(true);
+        setStepIndex(3);
+        Animated.timing(fade, { toValue: 1, duration: 380, useNativeDriver: true }).start();
+        if (chainFailed) setSettleError(chainFailed);
+
+        await Promise.all([refreshWallet(), refreshBalance()]);
+      } finally {
+        setSettling(false);
+      }
     })();
   }
+
+  const settlingOverlay = (
+    /*
+     * Not dismissable: there is nothing useful a tap can do to a signature
+     * already in front of somebody, and a backdrop that closed would look
+     * like a way to cancel a payment it cannot call back.
+     */
+    <Modal visible={settling} transparent animationType="fade">
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.overlay,
+          paddingHorizontal: 24,
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
+            borderWidth: 2,
+            borderRadius: 2,
+            paddingVertical: 22,
+            paddingHorizontal: 20,
+            width: '100%',
+            maxWidth: 380,
+            gap: 12,
+          }}
+        >
+          <SendingIndicator label="Paying the verifier" color={colors.primary} />
+          <Text style={[text.bodySmall, { color: colors.faintForeground }]}>
+            Approve it in your wallet. The money moves when that is done.
+          </Text>
+        </View>
+      </View>
+    </Modal>
+  );
 
   function handleQuery(reason: string) {
     if (!query) return;
@@ -600,6 +674,7 @@ export default function TrackingScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
+      {settlingOverlay}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}

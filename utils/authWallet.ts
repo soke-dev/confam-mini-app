@@ -293,6 +293,7 @@ function listen(entry: FoundWallet): void {
      * which is the sort of mismatch that ends with money going somewhere
      * nobody chose.
      */
+    switchedToPolygon = false;
     if (session && next.toLowerCase() !== session.address.toLowerCase()) store(null);
     address = next;
     if (!next) connected = null;
@@ -597,13 +598,34 @@ const POLYGON_HEX = '0x89';
  * Idempotent and cheap: a wallet already on Polygon returns immediately
  * without troubling anyone.
  */
+/**
+ * Remembered for the session, because the host does not always admit to it.
+ *
+ * The cheap check is eth_chainId, which prompts nobody. It stopped being
+ * enough: Nimiq Pay honours the switch for the request that follows, and then
+ * goes on reporting the chain it opened with — so every signature saw the
+ * wrong answer, asked again, and somebody approved the same switch four times
+ * for one job.
+ *
+ * Cleared whenever the account changes, and cleared again by a signature that
+ * fails on the chain, so a stale yes costs one retry rather than a dead end.
+ */
+let switchedToPolygon = false;
+
+export function forgetChainSwitch(): void {
+  switchedToPolygon = false;
+}
+
 async function ensurePolygon(): Promise<void> {
-  if (!connected) return;
+  if (!connected || switchedToPolygon) return;
 
   const current = (await connected.provider
     .request({ method: 'eth_chainId' })
     .catch(() => null)) as string | null;
-  if (current === POLYGON_HEX) return;
+  if (current === POLYGON_HEX) {
+    switchedToPolygon = true;
+    return;
+  }
 
   try {
     await connected.provider.request({
@@ -630,6 +652,8 @@ async function ensurePolygon(): Promise<void> {
       ],
     });
   }
+
+  switchedToPolygon = true;
 }
 
 export function useSignAuthorization(): SignTypedData {
@@ -643,10 +667,27 @@ export function useSignAuthorization(): SignTypedData {
      * approve — unlike the embedded wallet, which signs on their behalf. That
      * is not a regression: it is what holding your own keys means.
      */
-    const signature = await connected.provider.request({
-      method: 'eth_signTypedData_v4',
-      params: [address, JSON.stringify(typedData)],
-    });
-    return String(signature);
+    const sign = () =>
+      connected!.provider.request({
+        method: 'eth_signTypedData_v4',
+        params: [address, JSON.stringify(typedData)],
+      });
+
+    try {
+      return String(await sign());
+    } catch (cause) {
+      /*
+       * A remembered switch that turned out to be stale. The wallet says so
+       * plainly, so take it at its word, ask again and retry once — rather
+       * than reporting a chain problem to somebody who already approved the
+       * chain.
+       */
+      const message = (cause as { message?: string } | null)?.message ?? '';
+      if (!/chain/i.test(message)) throw cause;
+
+      switchedToPolygon = false;
+      await ensurePolygon();
+      return String(await sign());
+    }
   }, []);
 }
