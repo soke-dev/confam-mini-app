@@ -2,7 +2,7 @@ export type Fix = { lat: number; lng: number };
 
 export type WhereResult =
   | { ok: true; at: Fix }
-  | { ok: false; why: 'refused' | 'unavailable' };
+  | { ok: false; why: 'refused' | 'unavailable'; detail?: string };
 
 /**
  * Where the browser thinks it is, asked the way that is known to work.
@@ -30,7 +30,7 @@ const DENIED = 1;
 export function whereAmI(_ask: boolean): Promise<WhereResult> {
   return new Promise((resolve) => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      resolve({ ok: false, why: 'unavailable' });
+      resolve({ ok: false, why: 'unavailable', detail: 'navigator.geolocation is missing' });
       return;
     }
 
@@ -46,7 +46,18 @@ export function whereAmI(_ask: boolean): Promise<WhereResult> {
           at: { lat: position.coords.latitude, lng: position.coords.longitude },
         }),
       (error) =>
-        resolve({ ok: false, why: error.code === DENIED ? 'refused' : 'unavailable' }),
+        resolve({
+          ok: false,
+          why: error.code === DENIED ? 'refused' : 'unavailable',
+          /*
+           * Code and message together. The codes are 1 denied, 2 position
+           * unavailable, 3 timed out, and they mean genuinely different
+           * things: one is a permission, one is a device with no fix to give,
+           * one is fifteen seconds of nothing. Showing only the friendly
+           * sentence threw all three away.
+           */
+          detail: `code ${error.code}: ${error.message || 'no message'}`,
+        }),
       { enableHighAccuracy: true, timeout: TIMEOUT_MS, maximumAge: 0 },
     );
   });

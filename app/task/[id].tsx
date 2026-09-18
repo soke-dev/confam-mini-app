@@ -715,10 +715,14 @@ export default function TaskScreen() {
      * is worse than saying nothing.
      */
     let why: 'refused' | 'unavailable' | null = null;
+    let whyDetail: string | null = null;
 
     {
       const found = await whereAmI(true);
-      if (!found.ok) why = found.why;
+      if (!found.ok) {
+        why = found.why;
+        whyDetail = found.detail ?? null;
+      }
       if (found.ok) {
         at = found.at;
         setCoords(at);
@@ -801,7 +805,16 @@ export default function TaskScreen() {
       await notify({
         title: 'Could not find you',
         message:
-          'We check you are at the place before you take a job, and your location did not come through. Step outside or wait a moment, then try again.',
+          'We check you are at the place before you take a job, and your location did not come through. Step outside or wait a moment, then try again.' +
+          /*
+           * The reason, where there is one. Four identical words for a denied
+           * permission, a device with no fix and fifteen seconds of silence is
+           * three different problems wearing the same face, and nobody can act
+           * on it — including whoever is asked to fix it afterwards.
+           */
+          (whyDetail ? `
+
+(${whyDetail})` : ''),
       });
       return;
     }

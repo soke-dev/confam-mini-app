@@ -18,8 +18,20 @@ import { Platform } from 'react-native';
 export function insecurePage(): boolean {
   if (Platform.OS !== 'web') return false;
   if (typeof window === 'undefined') return false;
-  // Explicitly false, not merely falsy: an older browser that has never heard
-  // of isSecureContext leaves it undefined, and guessing "insecure" there
-  // would blame the page for a failure that is probably a real one.
-  return (window as { isSecureContext?: boolean }).isSecureContext === false;
+  const secure = (window as { isSecureContext?: boolean }).isSecureContext;
+  if (secure === false) return true;
+
+  /*
+   * And the protocol, for the case that check cannot cover.
+   *
+   * isSecureContext is undefined in a WebView that does not implement it, and
+   * treating undefined as "secure" meant the one message that would have
+   * explained the problem never appeared — the screen fell through to "could
+   * not find you" instead, which says nothing about the address it was served
+   * from. http on a real host is insecure whether or not the browser will
+   * admit to the concept; localhost is the documented exception.
+   */
+  const { protocol, hostname } = window.location ?? {};
+  if (protocol !== 'http:') return false;
+  return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]';
 }

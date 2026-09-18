@@ -15,8 +15,15 @@ export type Fix = { lat: number; lng: number };
 
 export type WhereResult =
   | { ok: true; at: Fix }
-  /** 'refused' means asking again is pointless; only Settings can undo it. */
-  | { ok: false; why: 'refused' | 'unavailable' };
+  /**
+   * 'refused' means asking again is pointless; only Settings can undo it.
+   *
+   * `detail` is whatever the platform said, carried through to the screen.
+   * Without it every location failure looks identical — a timeout, a denied
+   * permission and a WebView with no provider at all produce the same four
+   * words, and the only way to tell them apart is to guess.
+   */
+  | { ok: false; why: 'refused' | 'unavailable'; detail?: string };
 
 /**
  * How long to wait for a fix.
@@ -50,7 +57,11 @@ export async function whereAmI(ask: boolean): Promise<WhereResult> {
       TIMEOUT_MS,
     );
     return { ok: true, at: { lat: loc.coords.latitude, lng: loc.coords.longitude } };
-  } catch {
-    return { ok: false, why: 'unavailable' };
+  } catch (cause) {
+    return {
+      ok: false,
+      why: 'unavailable',
+      detail: cause instanceof Error ? cause.message : String(cause),
+    };
   }
 }
